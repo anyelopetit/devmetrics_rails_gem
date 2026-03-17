@@ -1,0 +1,2 @@
+class SlowQuery < ApplicationRecord
+end

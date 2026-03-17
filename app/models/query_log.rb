@@ -1,0 +1,2 @@
+class QueryLog < ApplicationRecord
+end
