@@ -148,15 +148,15 @@ end
 if defined?(RSpec) && RSpec.respond_to?(:configure)
   RSpec.configure do |config|
     config.before(:suite) do
-      Devmetrics::PerformanceHelpers.setup_test_run!
+      ::Devmetrics::PerformanceHelpers.setup_test_run!
     end
 
     config.after(:each) do |example|
-      Devmetrics::PerformanceHelpers.log_example_result(example)
+      ::Devmetrics::PerformanceHelpers.log_example_result(example)
     end
 
     config.after(:suite) do
-      Devmetrics::PerformanceHelpers.finish_test_run!
+      ::Devmetrics::PerformanceHelpers.finish_test_run!
     end
   end
 end

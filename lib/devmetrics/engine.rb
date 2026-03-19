@@ -2,9 +2,15 @@ module Devmetrics
   class Engine < ::Rails::Engine
     isolate_namespace Devmetrics
 
-    # Specify the layout for namespaced controllers
+    # Use a dedicated routes file so config/routes.rb can be the host-app routes
+    paths["config/routes.rb"] = "config/engine_routes.rb"
+
     config.to_prepare do
       Devmetrics::ApplicationController.layout "devmetrics/application"
+
+      require "devmetrics/log_writer"
+      require "devmetrics/sql_instrumentor"
+      require "devmetrics/run_orchestrator"
     end
 
     # ── Asset & View configuration ───────────────────────────────────────────
@@ -34,11 +40,10 @@ module Devmetrics
       end
     end
 
-    # ── Bullet integration ────────────────────────────────────────────────────
-    initializer "devmetrics.bullet", after: :load_config_initializers do
-      if defined?(Bullet)
-        # Bullet setup for standard dev environments
-        # Metrics tracking is managed by PerformanceHelpers during test runs
+    initializer "devmetrics.sql_notifications" do
+      ActiveSupport::Notifications.subscribe("sql.active_record") do |*args|
+        event = ActiveSupport::Notifications::Event.new(*args)
+        Devmetrics::SqlInstrumentor.record(event) if defined?(Devmetrics::SqlInstrumentor)
       end
     end
   end

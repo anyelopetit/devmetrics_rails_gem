@@ -55,7 +55,7 @@ The generator creates:
 In `config/routes.rb`:
 
 ```ruby
-mount Devmetrics::Engine, at: "/devmetrics"
+mount ::Devmetrics::Engine, at: "/devmetrics"
 ```
 
 ### 4. Add Solid Cable (if not already configured)

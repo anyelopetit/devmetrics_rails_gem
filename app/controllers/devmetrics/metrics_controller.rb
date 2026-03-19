@@ -1,50 +1,39 @@
 module Devmetrics
   class MetricsController < ApplicationController
     def index
-      @log_content = if File.exist?(Devmetrics.log_path)
-                       File.read(Devmetrics.log_path)
-                     else
-                       "No performance tests run yet. Run the tests to generate results."
-                     end
     end
 
     def run_tests
-      spec_dir = Rails.root.join("spec", "requests")
-
-      unless spec_dir.exist?
-        return render json: {
-          status: "error",
-          message: "No spec/requests directory found. Create request specs to run them here."
-        }, status: :unprocessable_entity
+      result = ::Devmetrics::RunOrchestrator.call
+      if result[:error]
+        render json: { error: result[:error] }, status: :unprocessable_entity
+      else
+        render json: result, status: :accepted
       end
+    end
 
-      # Find spec files that reference devmetrics tagline
-      spec_files = Dir.glob(spec_dir.join("**", "*_spec.rb")).select do |f|
-        File.read(f).include?("devmetrics: true") || File.read(f).include?("Devmetrics")
-      end
+    def run_status
+      run = ::Devmetrics::Run.find_by(run_id: params[:run_id])
+      return render json: { error: "Not found" }, status: :not_found unless run
 
-      # Fallback to all request specs if none are tagged
-      spec_files = Dir.glob(spec_dir.join("**", "*_spec.rb")) if spec_files.empty?
+      render json: {
+        run_id: run.run_id,
+        status: run.status,
+        files:  run.file_results.map { |r|
+          { file_key: r.file_key, file_path: r.file_path, status: r.status,
+            coverage: r.coverage, slow_query_count: r.slow_query_count, n1_count: r.n1_count }
+        }
+      }
+    end
 
-      if spec_files.empty?
-        return render json: {
-          status: "error",
-          message: "No request specs found in spec/requests/. Add some specs to start performance testing."
-        }, status: :unprocessable_entity
-      end
+    def download_log
+      result = ::Devmetrics::FileResult.find_by(
+        run_id: params[:run_id], file_key: params[:file_key]
+      )
+      return render plain: "Not found", status: :not_found unless result&.log_path
+      return render plain: "Log not ready", status: :not_found unless File.exist?(result.log_path)
 
-      # Execute rspec synchronously with tracking enabled
-      command = "DEVMETRICS_TRACKING=true bundle exec rspec #{spec_files.join(' ')} --no-color"
-      output = `#{command}`
-
-      # Read the resulting log file
-      results = if File.exist?(Devmetrics.log_path)
-                  File.read(Devmetrics.log_path)
-                else
-                  "Error during test execution. Please check the console output:\n#{output}"
-                end
-
-      render json: { status: "finished", spec_count: spec_files.size, results: results }
+      send_file result.log_path, type: "text/plain", disposition: "attachment"
     end
   end
 end

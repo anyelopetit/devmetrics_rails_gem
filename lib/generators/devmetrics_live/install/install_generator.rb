@@ -38,7 +38,7 @@ module Devmetrics
           say "\n  DevMetrics is already mounted in config/routes.rb\n", :green
         else
           say "\n  Add this line to your config/routes.rb:\n\n", :yellow
-          say "    mount Devmetrics::Engine, at: \"/devmetrics\"\n\n", :cyan
+          say "    mount ::Devmetrics::Engine, at: \"/devmetrics\"\n\n", :cyan
           say "  Then visit http://localhost:3000/devmetrics\n\n", :green
         end
 

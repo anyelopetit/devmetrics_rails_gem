@@ -1,0 +1,1 @@
+import "devmetrics/channels/consumer"

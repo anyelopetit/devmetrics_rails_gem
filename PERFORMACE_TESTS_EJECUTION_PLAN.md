@@ -96,7 +96,7 @@ lib/generators/
 
 ### Engine Design
 - `isolate_namespace Devmetrics` — no route/model conflicts.
-- Routes mounted with `mount Devmetrics::Engine, at: '/devmetrics'` in the host app.
+- Routes mounted with `mount ::Devmetrics::Engine, at: '/devmetrics'` in the host app.
 - The engine owns all controllers, models, channels, views, and assets.
 - Only external dependencies needed in host app: `solid_cable`, `bullet`, `rspec-rails`.
 
@@ -113,7 +113,7 @@ Creates:
 ```ruby
 Gem::Specification.new do |s|
   s.name        = "devmetrics"
-  s.version     = Devmetrics::VERSION
+  s.version     = ::Devmetrics::VERSION
   s.summary     = "Real-time Rails performance dashboard via Solid Cable"
   s.add_dependency "rails", ">= 7.1"
   s.add_dependency "solid_cable"
@@ -136,7 +136,7 @@ Remove personal portfolio framing. Document it as a Ruby gem:
 ## Verification Plan
 
 ### Automated
-- `bin/rails runner 'puts Devmetrics::VERSION'` — gem loaded.
+- `bin/rails runner 'puts ::Devmetrics::VERSION'` — gem loaded.
 - `bin/rails g devmetrics:install` — generator produces files.
 - POST `/devmetrics/run_tests` → returns 200, job enqueued.
 

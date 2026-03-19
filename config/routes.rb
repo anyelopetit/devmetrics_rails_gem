@@ -1,11 +1,17 @@
-Devmetrics::Engine.routes.draw do
-  root to: "metrics#index"
+Rails.application.routes.draw do
+  scope "/devmetrics", module: "devmetrics", as: "devmetrics" do
+    root "metrics#index"
 
-  get "/metrics", to: "metrics#index"
-  post "/run_tests", to: "metrics#run_tests"
+    post "run_tests",                            to: "metrics#run_tests"
+    get  "runs/:run_id/status",                  to: "metrics#run_status"
+    get  "runs/:run_id/logs/:file_key/download", to: "metrics#download_log"
 
-  get "/playground", to: "playground#run"
-  post "/playground/run", to: "playground#run"
+    get  "playground",     to: "playground#run"
+    post "playground/run", to: "playground#run"
+  end
 
-  get "/up", to: "rails/health#show", as: :health
+  get "/", to: redirect("/devmetrics")
+  get "/up", to: "rails/health#show"
+
+  mount ActionCable.server => "/devmetrics/cable"
 end
