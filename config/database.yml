@@ -22,13 +22,13 @@ default: &default
 
 development:
   <<: *default
-  database: devmetrics_live_development
+  database: devmetrics_development
 
   # The specified database role being used to connect to PostgreSQL.
   # To create additional roles in PostgreSQL see `$ createuser --help`.
   # When left blank, PostgreSQL will use the default role. This is
   # the same name as the operating system user running Rails.
-  #username: devmetrics_live
+  #username: devmetrics
 
   # The password associated with the PostgreSQL role (username).
   #password:
@@ -56,7 +56,7 @@ development:
 # Do not set this db to the same as development or production.
 test:
   <<: *default
-  database: devmetrics_live_test
+  database: devmetrics_test
 
 # As with config/credentials.yml, you never want to store sensitive information,
 # like your database password, in your source code. If your source code is
@@ -81,18 +81,18 @@ test:
 production:
   primary: &primary_production
     <<: *default
-    database: devmetrics_live_production
-    username: devmetrics_live
-    password: <%= ENV["DEVMETRICS_LIVE_DATABASE_PASSWORD"] %>
+    database: devmetrics_production
+    username: devmetrics
+    password: <%= ENV["devmetrics_DATABASE_PASSWORD"] %>
   cache:
     <<: *primary_production
-    database: devmetrics_live_production_cache
+    database: devmetrics_production_cache
     migrations_paths: db/cache_migrate
   queue:
     <<: *primary_production
-    database: devmetrics_live_production_queue
+    database: devmetrics_production_queue
     migrations_paths: db/queue_migrate
   cable:
     <<: *primary_production
-    database: devmetrics_live_production_cable
+    database: devmetrics_production_cable
     migrations_paths: db/cable_migrate

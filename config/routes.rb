@@ -1,20 +1,11 @@
-Rails.application.routes.draw do
-  # DevMetrics Live Routes
-  get  "/devmetrics",           to: "metrics#index"
-  post "/devmetrics/ping",      to: "metrics#ping"
-  post "/devmetrics/run_tests", to: "metrics#run_tests"
-  post "/playground/run",       to: "playground#run"
+Devmetrics::Engine.routes.draw do
+  root to: "metrics#index"
 
-  # Define your application routes per the DSL in https://guides.rubyonrails.org/routing.html
+  get "/metrics", to: "metrics#index"
+  post "/run_tests", to: "metrics#run_tests"
 
-  # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.
-  # Can be used by load balancers and uptime monitors to verify that the app is live.
-  get "up" => "rails/health#show", as: :rails_health_check
+  get "/playground", to: "playground#run"
+  post "/playground/run", to: "playground#run"
 
-  # Render dynamic PWA files from app/views/pwa/* (remember to link manifest in application.html.erb)
-  # get "manifest" => "rails/pwa#manifest", as: :pwa_manifest
-  # get "service-worker" => "rails/pwa#service_worker", as: :pwa_service_worker
-
-  # Defines the root path route ("/")
-  root "metrics#index"
+  get "/up", to: "rails/health#show", as: :health
 end

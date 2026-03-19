@@ -1,7 +1,6 @@
-require 'rails_helper'
-require 'devmetrics_live'
+require 'devmetrics'
 
-RSpec.describe "Performance Suite", type: :request, devmetrics_live: true do
+RSpec.describe "Performance Suite", type: :request, devmetrics: true do
   it "performs a slow query" do
     # Trigger a dummy slow query if possible or just use sleep + notification
     ActiveSupport::Notifications.instrument('sql.active_record', sql: 'SELECT * FROM users OFFSET 5000', start: Time.now - 0.2, finish: Time.now) do

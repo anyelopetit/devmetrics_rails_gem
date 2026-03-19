@@ -1,4 +1,4 @@
-DevmetricsLive.setup do |config|
+Devmetrics.setup do |config|
   # Mount path (informational — change by updating the mount point in routes.rb)
   # config.mount_path = "/devmetrics"
 

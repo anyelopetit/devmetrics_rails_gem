@@ -1,5 +1,5 @@
 <%# ============================================================
-    DevMetrics Live — Dashboard View
+    DevMetrics — Dashboard View
     Design: Dark technical, IBM Plex Sans + JetBrains Mono
     Colors: #0F172A base, #1E293B cards, #22C55E accent
     ============================================================ %>
@@ -75,7 +75,7 @@
       <div style="padding: 0 1.5rem 1rem;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
           <span style="font-size:0.75rem; color:var(--text-secondary); font-family:var(--font-mono);" data-metrics-target="testProgressText">0% Complete</span>
-          <span style="font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono);" data-metrics-target="testFileCount">0 / 0 files</span>
+          <span style="font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono);" data-metrics-target="testFileCount">&nbsp;</span>
         </div>
         <div class="progress-track" style="height: 10px;">
           <div class="progress-bar" style="width:0%; background:linear-gradient(90deg, #22C55E, #4ADE80);" data-metrics-target="testProgressBar"></div>
@@ -313,29 +313,6 @@
 
         </div>
       </div>
-
-      <%# Skills badge card %>
-      <div class="panel" style="padding:1.25rem 1.5rem;">
-        <h3 style="font-size:0.75rem; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-muted); margin:0 0 0.875rem;">Skills Demonstrated</h3>
-        <div style="display:flex; flex-direction:column; gap:0.5rem;">
-          <% [
-            ["Solid Cable", "Real-time broadcasts, zero Redis", "#3B82F6"],
-            ["Hotwire / Turbo", "No heavy JS framework needed", "#A855F7"],
-            ["Bullet Gem", "Automatic N+1 detection", "#EF4444"],
-            ["ActiveJob", "Background metrics analysis", "#EAB308"],
-            ["SimpleCov", "Live coverage integration", "#22C55E"]
-          ].each do |name, desc, color| %>
-            <div style="display:flex; align-items:baseline; gap:0.625rem;">
-              <span style="width:6px; height:6px; border-radius:50%; background:<%= color %>; flex-shrink:0; margin-top:5px;"></span>
-              <div>
-                <span style="font-size:0.8125rem; font-weight:600; color:var(--text-primary); font-family:var(--font-mono);"><%= name %></span>
-                <span style="font-size:0.75rem; color:var(--text-muted); margin-left:0.375rem;"><%= desc %></span>
-              </div>
-            </div>
-          <% end %>
-        </div>
-      </div>
-
     </div>
   </div>
 

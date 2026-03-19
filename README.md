@@ -1,6 +1,6 @@
-# DevMetrics Live
+# DevMetrics
 
-**DevMetrics Live** is a mountable Rails Engine gem that adds a real-time performance monitoring dashboard to any Rails 7.1+ application. It surfaces slow SQL queries, detects N+1 issues, streams test run output via ActionCable (Solid Cable, no Redis), and shows memory and DB connection metrics — all at a configurable route.
+**DevMetrics** is a mountable Rails Engine gem that adds a real-time performance monitoring dashboard to any Rails 7.1+ application. It surfaces slow SQL queries, detects N+1 issues, streams test run output via ActionCable (Solid Cable, no Redis), and shows memory and DB connection metrics — all at a configurable route.
 
 ---
 
@@ -33,21 +33,21 @@
 
 ```ruby
 # Gemfile
-gem "devmetrics_live", path: "/path/to/devmetrics_live"  # local gem
+gem "devmetrics", path: "/path/to/devmetrics"  # local gem
 # or once published:
-# gem "devmetrics_live"
+# gem "devmetrics"
 ```
 
 ### 2. Run the install generator
 
 ```bash
 bundle install
-rails g devmetrics_live:install
+rails g devmetrics:install
 rails db:migrate
 ```
 
 The generator creates:
-- `config/initializers/devmetrics_live.rb` — optional configuration
+- `config/initializers/devmetrics.rb` — optional configuration
 - Migration files for `query_logs` and `slow_queries` tables
 
 ### 3. Mount the engine
@@ -55,7 +55,7 @@ The generator creates:
 In `config/routes.rb`:
 
 ```ruby
-mount DevmetricsLive::Engine, at: "/devmetrics"
+mount Devmetrics::Engine, at: "/devmetrics"
 ```
 
 ### 4. Add Solid Cable (if not already configured)
@@ -77,8 +77,8 @@ Visit **http://localhost:3000/devmetrics**
 ## Configuration
 
 ```ruby
-# config/initializers/devmetrics_live.rb
-DevmetricsLive.setup do |config|
+# config/initializers/devmetrics.rb
+Devmetrics.setup do |config|
   config.slow_query_threshold_ms = 100   # Log queries slower than 100ms
   config.max_slow_queries        = 500   # Keep at most 500 slow query records
 end
@@ -90,7 +90,7 @@ end
 
 The **"Run Performance Tests"** button on the dashboard will:
 
-1. Scan `spec/requests/` for files that `require 'devmetrics_live'` (or fall back to all request specs if none are tagged).
+1. Scan `spec/requests/` for files that `require 'devmetrics'` (or fall back to all request specs if none are tagged).
 2. Run them via `bundle exec rspec --format documentation`.
 3. Instrument every SQL query and broadcast each output line to the dashboard in real time.
 4. Store slow queries and N+1 detections. Update the stat cards when the run completes.
@@ -99,9 +99,9 @@ The **"Run Performance Tests"** button on the dashboard will:
 
 ```ruby
 # spec/requests/posts_spec.rb
-require 'devmetrics_live'
+require 'devmetrics'
 
-RSpec.describe "Posts", devmetrics_live: true do
+RSpec.describe "Posts", devmetrics: true do
   it "lists posts efficiently" do
     get "/posts"
     expect(response).to have_http_status(:success)
@@ -109,7 +109,7 @@ RSpec.describe "Posts", devmetrics_live: true do
 end
 ```
 
-Any file containing `devmetrics_live` (the string or `require`) will be picked up by the runner. Files without the tag are skipped unless no tagged files exist, in which case all request specs run.
+Any file containing `devmetrics` (the string or `require`) will be picked up by the runner. Files without the tag are skipped unless no tagged files exist, in which case all request specs run.
 
 ---
 
@@ -154,7 +154,7 @@ Clone the repo and run the included Rails app:
 
 ```bash
 git clone <repo>
-cd devmetrics_live
+cd devmetrics
 bundle install
 rails db:create db:migrate
 bin/dev
