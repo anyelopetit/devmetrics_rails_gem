@@ -3,7 +3,7 @@ import consumer from "devmetrics/channels/consumer"
 
 export default class extends Controller {
   static targets = [
-    "runBtn", "fileList", "summary",
+    "runBtn", "fileList",
     "statTotalTests", "statSlowQueries", "statN1Issues", "statCoverage"
   ]
 
@@ -12,6 +12,7 @@ export default class extends Controller {
   connect() {
     this.subscriptions = {}
     this.runSubscription = null
+    this.fileMeta       = {}
     this.stats = { tests: 0, slow: 0, n1: 0, coverageSum: 0, coverageCount: 0 }
     this.currentRunId = null
   }
@@ -19,6 +20,8 @@ export default class extends Controller {
   disconnect() {
     this.teardownSubscriptions()
   }
+
+  // ── Run trigger ──────────────────────────────────────────────────────────
 
   async runTests() {
     this.runBtnTarget.disabled = true
@@ -36,11 +39,9 @@ export default class extends Controller {
       this.currentRunId = data.run_id
       this.runBtnTarget.textContent = `Running (${data.files.length} files)…`
 
-      // Subscribe to run-level channel first (for run_complete), then
-      // create panels and per-file subscriptions immediately from the HTTP
-      // response — don't wait for run_started which fires before we subscribe.
       this.subscribeToRun(data.run_id)
       data.files.forEach(f => {
+        this.fileMeta[f.file_key] = f
         this.createFilePanel(f.file_key, f.display_name, data.run_id)
         this.subscribeToFile(f.file_key, data.run_id)
       })
@@ -51,6 +52,8 @@ export default class extends Controller {
       console.error("DevMetrics run error:", err)
     }
   }
+
+  // ── Subscriptions ─────────────────────────────────────────────────────────
 
   subscribeToRun(runId) {
     this.runSubscription = consumer.subscriptions.create(
@@ -69,12 +72,7 @@ export default class extends Controller {
 
   subscribeToFile(fileKey, runId) {
     const sub = consumer.subscriptions.create(
-      {
-        channel:     "Devmetrics::MetricsChannel",
-        stream_type: "file",
-        file_key:    fileKey,
-        run_id:      runId
-      },
+      { channel: "Devmetrics::MetricsChannel", stream_type: "file", file_key: fileKey, run_id: runId },
       { received: (data) => this.handleFileEvent(fileKey, data) }
     )
     this.subscriptions[fileKey] = sub
@@ -82,24 +80,31 @@ export default class extends Controller {
 
   handleFileEvent(fileKey, data) {
     switch (data.type) {
-      case "file_started":
+
+      case "file_started": {
         this.setFileDot(fileKey, "running")
+        const meta = this.fileMeta[fileKey]
+        const path = meta?.display_name || fileKey
+        this.appendTerminalLine(fileKey, `$ bundle exec rspec ${path} --format documentation`, "command")
         break
+      }
 
       case "test_output":
         this.appendTerminalLine(fileKey, data.line, data.event_type)
-        if (data.event_type === "pass" || data.event_type === "fail") {
-          this.advanceProgress(fileKey)
-        }
+        if (data.event_type === "pass" || data.event_type === "fail") this.advanceProgress(fileKey)
         break
 
-      case "slow_query":
-        this.appendSidebarItem(fileKey, "slow", `${data.query.ms}ms — ${data.query.sql}`)
+      case "slow_query": {
+        const text = `${data.query.sql} (${data.query.ms}ms)`
+        this.appendTerminalLine(fileKey, `SLOW: ${text}`, "slow")
+        this.appendSidebarItem(fileKey, "slow", text)
         this.stats.slow++
         this.updateSummaryStats()
         break
+      }
 
       case "n1_detected":
+        this.appendTerminalLine(fileKey, `N+1 detected: ${data.message}`, "n1")
         this.appendSidebarItem(fileKey, "n1", data.message)
         this.stats.n1++
         this.updateSummaryStats()
@@ -125,21 +130,21 @@ export default class extends Controller {
     }
   }
 
+  // ── Panel construction ────────────────────────────────────────────────────
+
   createFilePanel(fileKey, displayName, runId) {
-    const panel = document.createElement("div")
-    panel.id = `dm-file-${fileKey}`
-    panel.className = "dm-file-row"
-    panel.innerHTML = this.panelTemplate(fileKey, displayName, runId)
-    this.fileListTarget.appendChild(panel)
-    if (this.fileListTarget.children.length === 1) {
-      this.togglePanel(fileKey)
-    }
+    const row = document.createElement("div")
+    row.id = `dm-file-${fileKey}`
+    row.className = "dm-file-row"
+    row.innerHTML = this.panelTemplate(fileKey, displayName, runId)
+    this.fileListTarget.appendChild(row)
+    // Auto-open the first panel
+    if (this.fileListTarget.children.length === 1) this.togglePanel(fileKey)
   }
 
   panelTemplate(fileKey, displayName, runId) {
     return `
-      <div class="dm-file-header" data-action="click->metrics#togglePanel"
-           data-file-key="${fileKey}">
+      <div class="dm-file-header" data-action="click->metrics#togglePanel" data-file-key="${fileKey}">
         <span class="dm-chevron" id="dm-chev-${fileKey}">▶</span>
         <span class="dm-dot dm-dot--pending" id="dm-dot-${fileKey}"></span>
         <span class="dm-file-name">${displayName}</span>
@@ -147,28 +152,27 @@ export default class extends Controller {
       </div>
 
       <div class="dm-progress-bar">
-        <div class="dm-progress-fill" id="dm-prog-${fileKey}" style="width: 0%"></div>
+        <div class="dm-progress-fill" id="dm-prog-${fileKey}" style="width:0%"></div>
       </div>
 
       <div class="dm-panel" id="dm-panel-${fileKey}">
         <div class="dm-terminal" id="dm-term-${fileKey}"></div>
         <div class="dm-sidebar">
           <div class="dm-sidebar-section">
-            <div class="dm-sidebar-label">Slow queries</div>
-            <div id="dm-slow-${fileKey}"></div>
+            <div class="dm-sidebar-label">Slow Queries</div>
+            <div id="dm-slow-${fileKey}" class="dm-sidebar-items"></div>
           </div>
           <div class="dm-sidebar-section">
-            <div class="dm-sidebar-label">N+1 issues</div>
-            <div id="dm-n1-${fileKey}"></div>
+            <div class="dm-sidebar-label">N+1 Issues</div>
+            <div id="dm-n1-${fileKey}" class="dm-sidebar-items"></div>
           </div>
           <div class="dm-sidebar-section">
             <div class="dm-sidebar-label">Coverage</div>
             <div id="dm-cov-${fileKey}" class="dm-sidebar-cov">—</div>
           </div>
-          <div class="dm-sidebar-section">
-            <a href="${this.logDownloadUrl(runId, fileKey)}"
-               class="dm-log-link" id="dm-log-${fileKey}" style="display:none">
-              Download log
+          <div class="dm-sidebar-section dm-sidebar-log">
+            <a href="${this.logDownloadUrl(runId, fileKey)}" class="dm-log-link" id="dm-log-${fileKey}" style="display:none">
+              ↓ Download log
             </a>
           </div>
         </div>
@@ -177,18 +181,23 @@ export default class extends Controller {
   }
 
   togglePanel(fileKey) {
-    if (typeof fileKey !== "string") {
-      fileKey = fileKey.currentTarget.dataset.fileKey
-    }
+    if (typeof fileKey !== "string") fileKey = fileKey.currentTarget.dataset.fileKey
     const panel = document.getElementById(`dm-panel-${fileKey}`)
     const chev  = document.getElementById(`dm-chev-${fileKey}`)
     const open  = panel.classList.toggle("dm-panel--open")
     chev.classList.toggle("dm-chevron--open", open)
   }
 
-  appendTerminalLine(fileKey, text, eventType = "info") {
+  // ── Terminal helpers ──────────────────────────────────────────────────────
+
+  appendTerminalLine(fileKey, rawText, eventType = "info") {
     const term = document.getElementById(`dm-term-${fileKey}`)
     if (!term) return
+
+    // Skip blank info lines that just add noise
+    if (eventType === "info" && rawText.trim() === "") return
+
+    const text = this.formatLine(rawText, eventType)
     const line = document.createElement("div")
     line.className = `dm-term-line dm-term-line--${eventType}`
     line.textContent = text
@@ -197,6 +206,12 @@ export default class extends Controller {
 
     this.stats.tests += (eventType === "pass" || eventType === "fail") ? 1 : 0
     this.updateSummaryStats()
+  }
+
+  formatLine(text, eventType) {
+    if (eventType === "pass") return "✓ " + text.replace(/^\s*[\.·✓]\s*/, "").trim()
+    if (eventType === "fail") return "✗ " + text.replace(/^\s*[F!✗]\s*/, "").trim()
+    return text
   }
 
   appendSidebarItem(fileKey, type, text) {
@@ -211,15 +226,13 @@ export default class extends Controller {
   advanceProgress(fileKey) {
     const fill = document.getElementById(`dm-prog-${fileKey}`)
     if (!fill) return
-    const current = parseFloat(fill.style.width) || 0
-    const next = Math.min(95, current + (95 - current) * 0.12)
-    fill.style.width = `${next.toFixed(1)}%`
+    const cur = parseFloat(fill.style.width) || 0
+    fill.style.width = `${Math.min(95, cur + (95 - cur) * 0.12).toFixed(1)}%`
   }
 
   setFileDot(fileKey, state) {
     const dot = document.getElementById(`dm-dot-${fileKey}`)
-    if (!dot) return
-    dot.className = `dm-dot dm-dot--${state}`
+    if (dot) dot.className = `dm-dot dm-dot--${state}`
   }
 
   setCoverageLabel(fileKey, pct) {
@@ -231,6 +244,7 @@ export default class extends Controller {
     const status = data.status
     this.setFileDot(fileKey, status)
 
+    // Progress bar → 100%
     const fill = document.getElementById(`dm-prog-${fileKey}`)
     if (fill) {
       fill.style.width = "100%"
@@ -238,47 +252,68 @@ export default class extends Controller {
       fill.classList.toggle("dm-progress-fill--failed", status === "failed")
     }
 
+    // Summary line in terminal
+    const term = document.getElementById(`dm-term-${fileKey}`)
+    if (term) {
+      const sep = document.createElement("div")
+      sep.className = "dm-term-separator"
+      term.appendChild(sep)
+      const total = (data.passed || 0) + (data.failed || 0)
+      const covStr = data.coverage != null ? ` — coverage ${data.coverage}%` : ""
+      this.appendTerminalLine(
+        fileKey,
+        `${total} example${total !== 1 ? "s" : ""}. ${data.failed || 0} failure${data.failed !== 1 ? "s" : ""}${covStr}`,
+        "summary"
+      )
+    }
+
+    // Header badges
     const meta = document.getElementById(`dm-meta-${fileKey}`)
     if (meta) meta.innerHTML = this.metaBadges(data)
 
+    // Log link
     const logLink = document.getElementById(`dm-log-${fileKey}`)
-    if (logLink) logLink.style.display = "block"
+    if (logLink) logLink.style.display = "inline-flex"
   }
 
   metaBadges(data) {
     const secs = ((data.duration_ms || 0) / 1000).toFixed(2)
     let html = `<span class="dm-badge dm-badge--time">${secs}s</span>`
-    if (data.n1_count > 0)   html += `<span class="dm-badge dm-badge--n1">${data.n1_count} N+1</span>`
-    if (data.slow_count > 0) html += `<span class="dm-badge dm-badge--slow">${data.slow_count} slow</span>`
-    if (data.coverage != null) html += `<span class="dm-badge dm-badge--cov">${data.coverage}% cov</span>`
+    if ((data.n1_count || 0) > 0)
+      html += `<span class="dm-badge dm-badge--n1">${data.n1_count} N+1</span>`
+    if ((data.slow_count || 0) > 0)
+      html += `<span class="dm-badge dm-badge--slow">${data.slow_count} slow</span>`
+    if (data.coverage != null)
+      html += `<span class="dm-badge dm-badge--cov">${data.coverage}% cov</span>`
     return html
   }
+
+  // ── Summary stats ─────────────────────────────────────────────────────────
 
   updateSummaryStats() {
     if (this.hasStatTotalTestsTarget)
       this.statTotalTestsTarget.textContent = this.stats.tests
-
     if (this.hasStatSlowQueriesTarget)
       this.statSlowQueriesTarget.textContent = this.stats.slow
-
     if (this.hasStatN1IssuesTarget)
       this.statN1IssuesTarget.textContent = this.stats.n1
-
-    if (this.hasStatCoverageTarget && this.stats.coverageCount > 0) {
-      const avg = (this.stats.coverageSum / this.stats.coverageCount).toFixed(1)
-      this.statCoverageTarget.textContent = `${avg}%`
-    }
+    if (this.hasStatCoverageTarget && this.stats.coverageCount > 0)
+      this.statCoverageTarget.textContent =
+        `${(this.stats.coverageSum / this.stats.coverageCount).toFixed(1)}%`
   }
+
+  // ── Teardown & utilities ──────────────────────────────────────────────────
 
   resetState() {
     this.teardownSubscriptions()
+    this.fileMeta = {}
     this.stats = { tests: 0, slow: 0, n1: 0, coverageSum: 0, coverageCount: 0 }
     this.fileListTarget.innerHTML = ""
     this.updateSummaryStats()
   }
 
   teardownSubscriptions() {
-    Object.values(this.subscriptions).forEach(sub => sub?.unsubscribe())
+    Object.values(this.subscriptions).forEach(s => s?.unsubscribe())
     this.subscriptions = {}
     this.runSubscription?.unsubscribe()
     this.runSubscription = null
