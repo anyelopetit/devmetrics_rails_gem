@@ -1,2 +1,0 @@
-class SlowQuery < ApplicationRecord
-end

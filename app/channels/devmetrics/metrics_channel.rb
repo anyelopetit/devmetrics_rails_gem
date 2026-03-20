@@ -20,4 +20,6 @@ module Devmetrics
       stop_all_streams
     end
   end
+
+  DevmetricsChannel = MetricsChannel
 end

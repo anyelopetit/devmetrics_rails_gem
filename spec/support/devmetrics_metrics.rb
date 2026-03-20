@@ -1,29 +1,37 @@
 require 'bullet'
 
-module MetricsTracker
-  THREAD_KEY = :devmetrics_test_metrics
-
-  def self.capture
-    Thread.current[THREAD_KEY] ||= { slow_queries: [], nplusone_issues: [] }
-    yield
-  ensure
-    if Bullet.respond_to?(:notification_collector) && Bullet.notification_collector&.notifications_present?
-      Bullet.notification_collector.notifications.each do |notification|
-        Thread.current[THREAD_KEY][:nplusone_issues] << notification if notification.type == :n_plus_one_query
-      end
-    end
-    Thread.current[THREAD_KEY] = nil
-  end
-end
-
 RSpec.configure do |config|
-  config.around(:each) do |example|
+  config.around(:each, type: :request) do |example|
+    queries = []
+    subscriber = ActiveSupport::Notifications.subscribe('sql.active_record') do |_name, _start, _finish, _id, payload|
+      next if payload[:name]&.match?(/\A(SCHEMA|TRANSACTION)\z/)
+      next if payload[:sql]&.match?(/\A(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)/i)
+      queries << payload[:sql]
+    end
+
     if defined?(Bullet) && Bullet.enabled?
       Bullet.start_request
-      MetricsTracker.capture { example.run }
+    end
+
+    example.run
+
+    if defined?(Bullet) && Bullet.enabled?
       Bullet.end_request
-    else
-      example.run
+      if Bullet.notification_collector&.notifications_present?
+        puts "\n[Bullet] N+1 warnings in: #{example.full_description}"
+        Bullet.notification_collector.notifications.each do |notification|
+          puts "  #{notification.body}"
+        end
+      end
+    end
+
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+
+    if queries.any?
+      puts "\n[SQL] #{queries.size} quer#{queries.size == 1 ? 'y' : 'ies'} in: #{example.full_description}"
+      queries.each_with_index do |sql, i|
+        puts "  #{i + 1}. #{sql}"
+      end
     end
   end
 end

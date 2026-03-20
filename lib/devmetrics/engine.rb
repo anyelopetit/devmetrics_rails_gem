@@ -11,6 +11,13 @@ module Devmetrics
       require "devmetrics/log_writer"
       require "devmetrics/sql_instrumentor"
       require "devmetrics/run_orchestrator"
+      require "devmetrics/bullet_log_parser"
+
+      # Make channel available without namespace prefix for ActionCable
+      # Must set in Object namespace so ActionCable can find it
+      unless ::Object.const_defined?(:DevmetricsChannel)
+        ::Object.const_set(:DevmetricsChannel, Devmetrics::MetricsChannel)
+      end
     end
 
     # ── Asset & View configuration ───────────────────────────────────────────
@@ -36,7 +43,12 @@ module Devmetrics
 
     initializer "devmetrics.assets" do |app|
       if app.config.respond_to?(:assets)
+        app.config.assets.paths << root.join("app/assets/stylesheets")
+        app.config.assets.paths << root.join("app/assets/javascripts")
         app.config.assets.paths << root.join("app/javascript")
+        unless defined?(::Propshaft)
+          app.config.assets.precompile += %w[devmetrics/application.js devmetrics/dashboard.css]
+        end
       end
     end
 
@@ -44,6 +56,12 @@ module Devmetrics
       ActiveSupport::Notifications.subscribe("sql.active_record") do |*args|
         event = ActiveSupport::Notifications::Event.new(*args)
         Devmetrics::SqlInstrumentor.record(event) if defined?(Devmetrics::SqlInstrumentor)
+      end
+    end
+
+    config.after_initialize do
+      if ENV["DEVMETRICS_SKIP_DB_SETUP"] == "1"
+        Rails.logger.info "[DevMetrics] Database setup skipped for test runs"
       end
     end
   end

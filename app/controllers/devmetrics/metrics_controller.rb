@@ -1,5 +1,7 @@
 module Devmetrics
   class MetricsController < ApplicationController
+    skip_before_action :verify_authenticity_token, only: [ :run_tests, :run_status ]
+
     def index
     end
 

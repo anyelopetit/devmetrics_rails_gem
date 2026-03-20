@@ -1,4 +1,4 @@
-class CreateDevmetricsFileResults < ActiveRecord::Migration[8.0]
+class CreateDevmetricsFileResults < ActiveRecord::Migration[7.2]
   def change
     create_table :devmetrics_file_results do |t|
       t.string  :run_id,           null: false

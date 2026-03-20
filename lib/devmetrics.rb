@@ -10,12 +10,16 @@ require "benchmark"
 require "json"
 require "securerandom"
 
-# Core dependencies for the Engine's assets and dashboard
-require "importmap-rails"
-require "turbo-rails"
-require "stimulus-rails"
-require "propshaft"
-require "bullet"
+# Optional dependencies — loaded if present in host app
+%w[importmap-rails turbo-rails stimulus-rails propshaft bullet].each do |dep|
+  begin
+    require dep
+  rescue LoadError
+    # Optional dependency not available
+  end
+end
+
+require "devmetrics/compatibility"
 
 module Devmetrics
   class Configuration

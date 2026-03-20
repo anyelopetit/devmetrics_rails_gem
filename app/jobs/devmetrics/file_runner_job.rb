@@ -5,6 +5,7 @@ module Devmetrics
     SLOW_THRESHOLD_MS = -> { Devmetrics.configuration.slow_query_threshold_ms }
 
     def perform(run_id:, file_path:, file_key:)
+      ENV["DEVMETRICS_SKIP_DB_SETUP"] = "1"
       result = ::Devmetrics::FileResult.find_by!(run_id: run_id, file_key: file_key)
       result.update!(status: :running)
 
@@ -30,38 +31,108 @@ module Devmetrics
     private
 
     def run_rspec(file_path, stream, log, result)
+      env = {
+        "RAILS_ENV" => "test",
+        "DEVMETRICS_SKIP_DB_SETUP" => "1",
+        "BUNDLE_GEMFILE" => Rails.root.join("Gemfile").to_s
+      }
+
       cmd = [
         "bundle", "exec", "rspec", file_path,
-        "--format", "documentation",
-        "--format", "json",
-        "--out", json_output_path(result.run_id, result.file_key)
+        "--format", "documentation"
       ]
 
-      passed = 0
-      failed = 0
-      start  = Time.current
+      bullet_log_path = Rails.root.join("log", "bullet.log")
+      File.truncate(bullet_log_path, 0) if File.exist?(bullet_log_path)
 
-      Open3.popen2e(*cmd, chdir: Rails.root.to_s) do |_stdin, stdout_err, wait_thr|
-        stdout_err.each_line do |raw_line|
+      start      = Time.current
+      stdout_all = ""
+
+      IO.popen(env, cmd, chdir: Rails.root.to_s) do |io|
+        io.each_line do |raw_line|
           line = raw_line.chomp
+          stdout_all += line + "\n"
           log.write(line)
 
           event_type = classify_line(line)
           broadcast(stream, type: "test_output", line: line, event_type: event_type)
+        end
+      end
 
-          passed += 1 if event_type == "pass"
-          failed += 1 if event_type == "fail"
+      exit_status = $?
+
+      stream_bullet_log(bullet_log_path, stream, log, result)
+      stream_coverage_summary(file_path, stream, log)
+
+      summary = parse_rspec_summary(stdout_all)
+      status  = exit_status.success? && summary[:failures] == 0 ? :passed : :failed
+
+      result.update!(
+        status:       status,
+        passed_tests: summary[:passes],
+        failed_tests: summary[:failures],
+        total_tests:  summary[:examples],
+        duration_ms:  ((Time.current - start) * 1000).round
+      )
+    end
+
+    def stream_bullet_log(bullet_log_path, stream, log, result)
+      return unless File.exist?(bullet_log_path)
+
+      content = File.read(bullet_log_path).strip
+      return if content.blank?
+
+      warnings = ::Devmetrics::BulletLogParser.parse(content)
+      return if warnings.empty?
+
+      emit(stream, log, "")
+      emit(stream, log, "── Bullet Warnings (#{warnings.size}) ──")
+
+      warnings.each do |w|
+        prefix = w.type == :add_eager_load ? "[N+1]" : "[UNUSED EAGER]"
+        emit(stream, log, "  #{prefix} #{w.model_class} => #{w.associations} — #{w.fix_suggestion}")
+        if w.call_stack.first
+          source = w.call_stack.find { |l| !l.include?("/gems/") && !l.include?("/ruby/") } || w.call_stack.first
+          emit(stream, log, "        Source: #{source}")
         end
 
-        exit_status = wait_thr.value
-        status = exit_status.success? && failed == 0 ? :passed : :failed
-        result.update!(
-          status:       status,
-          passed_tests: passed,
-          failed_tests: failed,
-          total_tests:  passed + failed,
-          duration_ms:  ((Time.current - start) * 1000).round
+        ::Devmetrics::SlowQuery.create!(
+          run_id:         result.run_id,
+          file_key:       result.file_key,
+          model_class:    w.model_class,
+          fix_suggestion: w.fix_suggestion,
+          line_number:    w.line_number
         )
+      end
+
+      result.update!(n1_count: warnings.count { |w| w.type == :add_eager_load })
+    end
+
+    def stream_coverage_summary(file_path, stream, log)
+      resultset_path = Rails.root.join("coverage", ".resultset.json")
+      return unless File.exist?(resultset_path)
+
+      rs  = JSON.parse(File.read(resultset_path)) rescue {}
+      pct = extract_coverage_pct(rs, file_path)
+      return unless pct
+
+      emit(stream, log, "")
+      emit(stream, log, "── Coverage: #{pct.round(1)}% ──")
+    end
+
+    def emit(stream, log, line)
+      log.write(line)
+      broadcast(stream, type: "test_output", line: line, event_type: "info")
+    end
+
+    def parse_rspec_summary(output)
+      if output =~ /(\d+)\s+examples?,\s+(\d+)\s+failures?(?:,\s+(\d+)\s+pending)?/m
+        examples = $1.to_i
+        failures = $2.to_i
+        pending  = $3.to_i rescue 0
+        { examples: examples, failures: failures, pending: pending, passes: examples - failures - pending }
+      else
+        { examples: 0, failures: 0, pending: 0, passes: 0 }
       end
     end
 
@@ -91,7 +162,7 @@ module Devmetrics
 
       result.update!(
         slow_query_count: slow.size,
-        n1_count:         n1_groups.size
+        n1_count:         result.n1_count > 0 ? result.n1_count : n1_groups.size
       )
     end
 
@@ -143,9 +214,7 @@ module Devmetrics
             run.update!(status: :completed, finished_at: Time.current)
             ActionCable.server.broadcast(
               "devmetrics:run:#{run_id}",
-              type:        "run_complete",
-              run_id:      run_id,
-              total_files: run.total_files
+              { type: "run_complete", run_id: run_id, total_files: run.total_files }
             )
             write_run_summary(run)
           end
@@ -158,7 +227,7 @@ module Devmetrics
     end
 
     def classify_line(line)
-      if line.match?(/^\s+\d+ examples?,/)
+      if line.match?(/(\d+)\s+examples?,\s+(\d+)\s+failures?/)
         "summary"
       elsif line.match?(/^\s*[·.]\s/) || line.strip.start_with?(".")
         "pass"
@@ -168,6 +237,8 @@ module Devmetrics
         "pending"
       elsif line.include?("ERROR") || line.include?("Error:")
         "error"
+      elsif line.match?(/^\s{3,}/)
+        "pass"
       else
         "info"
       end

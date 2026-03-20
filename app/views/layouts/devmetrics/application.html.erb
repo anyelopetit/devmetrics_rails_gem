@@ -8,7 +8,7 @@
     <meta name="mobile-web-app-capable" content="yes">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
-    <meta name="action-cable-url" content="/devmetrics/cable">
+    <meta name="action-cable-url" content="/cable">
 
     <%= yield :head %>
 
@@ -21,9 +21,425 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-    <%# Styles are inline in this layout for performance %>
-    <%= javascript_importmap_tags "devmetrics" %>
-    <%= stylesheet_link_tag "devmetrics/dashboard", "data-turbo-track": "reload" %>
+    <%# Load JS from jsdelivr CDN (UMD builds for global access) %>
+    <script src="https://cdn.jsdelivr.net/npm/@hotwired/turbo@8.0.12/dist/turbo.es2017-umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@hotwired/stimulus@3.2.2/dist/stimulus.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/actioncable@5.2.8-1/lib/assets/compiled/action_cable.js"></script>
+    <script>
+      (function() {
+        if (typeof Stimulus === "undefined" || !Stimulus.Application) return;
+        if (typeof ActionCable === "undefined") return;
+
+        let usePolling = false;
+        let pollingInterval = null;
+        let modeIndicator = null;
+        let consumer = null;
+
+        function showModeIndicator(text, isRealtime) {
+          if (modeIndicator) modeIndicator.remove();
+          modeIndicator = document.createElement('div');
+          modeIndicator.className = 'dm-mode-indicator' + (isRealtime ? ' dm-mode-indicator--realtime' : '');
+          modeIndicator.innerHTML = `
+            <span class="dm-mode-dot"></span>
+            <span>${text}</span>
+            ${!isRealtime ? '<button class="dm-retry-btn" onclick="window.retryWebSocket()">Retry WebSocket</button>' : ''}
+          `;
+          document.body.appendChild(modeIndicator);
+        }
+
+        function hideModeIndicator() {
+          if (modeIndicator) {
+            modeIndicator.remove();
+            modeIndicator = null;
+          }
+        }
+
+        window.retryWebSocket = function() {
+          usePolling = false;
+          if (pollingInterval) clearInterval(pollingInterval);
+          if (consumer) consumer.disconnect();
+          consumer = ActionCable.createConsumer();
+          if (window.devmetricsApp && window.devmetricsApp.currentRunId) {
+            window.devmetricsApp.subscribeToRun(window.devmetricsApp.currentRunId);
+          }
+          showModeIndicator('Connecting...', true);
+          setTimeout(() => {
+            if (!usePolling) showModeIndicator('Live', true);
+          }, 2000);
+        };
+
+        const app = Stimulus.Application.start();
+
+        app.register("metrics", class extends Stimulus.Controller {
+          static targets = ["runBtn", "fileList", "statTotalTests", "statSlowQueries", "statN1Issues", "statCoverage"];
+
+          connect() {
+            this.subscriptions = {};
+            this.runSubscription = null;
+            this.fileMeta = {};
+            this.stats = { tests: 0, slow: 0, n1: 0, coverageSum: 0, coverageCount: 0 };
+            this.currentRunId = null;
+            window.devmetricsApp = this;
+            this.initConnection();
+          }
+
+          disconnect() {
+            this.teardownSubscriptions();
+            if (pollingInterval) clearInterval(pollingInterval);
+            if (consumer) consumer.disconnect();
+          }
+
+          initConnection() {
+            if (typeof ActionCable === "undefined") {
+              this.enablePollingMode();
+              return;
+            }
+            try {
+              consumer = ActionCable.createConsumer();
+              showModeIndicator('Connecting...', true);
+              const timeout = setTimeout(() => {
+                if (usePolling === false) {
+                  this.enablePollingMode();
+                }
+              }, 3000);
+              this.testConnection = () => {
+                clearTimeout(timeout);
+                showModeIndicator('Live', true);
+              };
+              setTimeout(() => this.testConnection(), 1000);
+            } catch (e) {
+              this.enablePollingMode();
+            }
+          }
+
+          enablePollingMode() {
+            if (usePolling) return;
+            usePolling = true;
+            showModeIndicator('Polling mode', false);
+          }
+
+          async pollStatus() {
+            if (!usePolling || !this.currentRunId) return;
+            try {
+              const mount = this.element.closest("[data-devmetrics-mount-path]")
+                ?.dataset.devmetricsMountPath || "/devmetrics";
+              const resp = await fetch(`${mount}/runs/${this.currentRunId}/status`);
+              const data = await resp.json();
+              this.updateFromStatus(data);
+              if (data.status === 'running') {
+                pollingInterval = setTimeout(() => this.pollStatus(), 1000);
+              }
+            } catch (err) {
+              console.error('Polling error:', err);
+            }
+          }
+
+           updateFromStatus(data) {
+             if (data.files) {
+               data.files.forEach(f => {
+                 if (f.status === 'passed' || f.status === 'failed') {
+                   this.setFileDot(f.file_key, f.status);
+                   this.setFileLoader(f.file_key, false);
+                   this.updateFileStats(f.file_key, f);
+                 }
+               });
+             }
+             if (data.status === 'completed' || data.status === 'failed') {
+               this.runBtnTarget.disabled = false;
+               this.runBtnTarget.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5,3 19,12 5,21"/></svg> Run performance tests`;
+             }
+           }
+
+           async runTests() {
+             this.runBtnTarget.disabled = true;
+             this.runBtnTarget.innerHTML = `<span class="dm-spinner dm-spinner--sm"></span> Starting…`;
+             this.resetState();
+             if (pollingInterval) clearInterval(pollingInterval);
+            try {
+              const mount = this.element.closest("[data-devmetrics-mount-path]")
+                ?.dataset.devmetricsMountPath || "/devmetrics";
+              const resp = await fetch(`${mount}/run_tests`, {
+                method: "POST",
+                headers: {
+                  "X-CSRF-Token": document.querySelector("meta[name='csrf-token']")?.content || "",
+                  "Content-Type": "application/json"
+                }
+              });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.error || "Failed to start run");
+               this.currentRunId = data.run_id;
+               this.runBtnTarget.innerHTML = `<span class="dm-spinner dm-spinner--sm"></span> Running (${data.files.length} files)`;
+              data.files.forEach(f => {
+                this.fileMeta[f.file_key] = f;
+                this.createFilePanel(f.file_key, f.display_name, data.run_id);
+              });
+              if (usePolling) {
+                pollingInterval = setTimeout(() => this.pollStatus(), 1000);
+              } else {
+                this.subscribeToRun(data.run_id);
+                data.files.forEach(f => this.subscribeToFile(f.file_key, data.run_id));
+              }
+             } catch (err) {
+               this.runBtnTarget.disabled = false;
+               this.runBtnTarget.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5,3 19,12 5,21"/></svg> Run performance tests`;
+               console.error("DevMetrics run error:", err);
+             }
+           }
+
+          subscribeToRun(runId) {
+            this.runSubscription = consumer.subscriptions.create(
+              { channel: "DevmetricsChannel", stream_type: "run", run_id: runId },
+              { received: (data) => this.handleRunEvent(data) }
+            );
+          }
+
+           handleRunEvent(data) {
+             if (data.type === "run_complete") {
+               this.runBtnTarget.disabled = false;
+               this.runBtnTarget.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5,3 19,12 5,21"/></svg> Run performance tests`;
+               hideModeIndicator();
+               if (this.runSubscription) this.runSubscription.unsubscribe();
+             }
+           }
+
+          subscribeToFile(fileKey, runId) {
+            const sub = consumer.subscriptions.create(
+              { channel: "DevmetricsChannel", stream_type: "file", file_key: fileKey, run_id: runId },
+              { received: (data) => this.handleFileEvent(fileKey, data) }
+            );
+            this.subscriptions[fileKey] = sub;
+          }
+
+           handleFileEvent(fileKey, data) {
+             switch (data.type) {
+               case "file_started": {
+                 this.setFileDot(fileKey, "running");
+                 this.setFileLoader(fileKey, true);
+                 const meta = this.fileMeta[fileKey];
+                 const path = meta && meta.display_name ? meta.display_name : fileKey;
+                 this.appendTerminalLine(fileKey, `$ bundle exec rspec ${path} --format documentation`, "command");
+                 break;
+               }
+              case "test_output":
+                this.appendTerminalLine(fileKey, data.line, data.event_type);
+                if (data.event_type === "pass" || data.event_type === "fail") this.advanceProgress(fileKey);
+                break;
+              case "slow_query": {
+                const text = `${data.query.sql} (${data.query.ms}ms)`;
+                this.appendTerminalLine(fileKey, `SLOW: ${text}`, "slow");
+                this.appendSidebarItem(fileKey, "slow", text);
+                this.stats.slow++;
+                this.updateSummaryStats();
+                break;
+              }
+              case "n1_detected":
+                this.appendTerminalLine(fileKey, `N+1 detected: ${data.message}`, "n1");
+                this.appendSidebarItem(fileKey, "n1", data.message);
+                this.stats.n1++;
+                this.updateSummaryStats();
+                break;
+              case "coverage_update":
+                this.setCoverageLabel(fileKey, data.pct);
+                this.stats.coverageSum += data.pct;
+                this.stats.coverageCount++;
+                this.updateSummaryStats();
+                break;
+              case "file_complete":
+                this.finalizePanel(fileKey, data);
+                if (this.subscriptions[fileKey]) this.subscriptions[fileKey].unsubscribe();
+                delete this.subscriptions[fileKey];
+                break;
+              case "file_error":
+                this.setFileDot(fileKey, "error");
+                this.appendTerminalLine(fileKey, `ERROR: ${data.message}`, "error");
+                break;
+            }
+          }
+
+          createFilePanel(fileKey, displayName, runId) {
+            const row = document.createElement("div");
+            row.id = `dm-file-${fileKey}`;
+            row.className = "dm-file-row";
+            row.innerHTML = this.panelTemplate(fileKey, displayName, runId);
+            this.fileListTarget.appendChild(row);
+            if (this.fileListTarget.children.length === 1) this.togglePanel(fileKey);
+          }
+
+          panelTemplate(fileKey, displayName, runId) {
+            return `
+              <div class="dm-file-header" data-action="click->metrics#togglePanel" data-file-key="${fileKey}">
+                <span class="dm-chevron" id="dm-chev-${fileKey}">▶</span>
+                <span class="dm-dot dm-dot--pending" id="dm-dot-${fileKey}"></span>
+                <span class="dm-file-name">${displayName}</span>
+                <span class="dm-file-meta" id="dm-meta-${fileKey}"></span>
+                <span class="dm-file-loader" id="dm-loader-${fileKey}" style="display:none;">
+                  <span class="dm-spinner dm-spinner--xs"></span>
+                </span>
+              </div>
+              <div class="dm-progress-bar">
+                <div class="dm-progress-fill" id="dm-prog-${fileKey}" style="width:0%"></div>
+              </div>
+              <div class="dm-panel" id="dm-panel-${fileKey}">
+                <div class="dm-terminal" id="dm-term-${fileKey}"></div>
+                <div class="dm-sidebar">
+                  <div class="dm-sidebar-section">
+                    <div class="dm-sidebar-label">Slow Queries</div>
+                    <div id="dm-slow-${fileKey}" class="dm-sidebar-items"></div>
+                  </div>
+                  <div class="dm-sidebar-section">
+                    <div class="dm-sidebar-label">N+1 Issues</div>
+                    <div id="dm-n1-${fileKey}" class="dm-sidebar-items"></div>
+                  </div>
+                  <div class="dm-sidebar-section">
+                    <div class="dm-sidebar-label">Coverage</div>
+                    <div id="dm-cov-${fileKey}" class="dm-sidebar-cov">—</div>
+                  </div>
+                  <div class="dm-sidebar-section dm-sidebar-log">
+                    <a href="/devmetrics/runs/${runId}/logs/${fileKey}/download" class="dm-log-link" id="dm-log-${fileKey}" style="display:none">
+                      ↓ Download log
+                    </a>
+                  </div>
+                </div>
+              </div>
+            `;
+          }
+
+          togglePanel(fileKey) {
+            if (typeof fileKey !== "string") fileKey = fileKey.currentTarget.dataset.fileKey;
+            const panel = document.getElementById(`dm-panel-${fileKey}`);
+            const chev  = document.getElementById(`dm-chev-${fileKey}`);
+            const open  = panel.classList.toggle("dm-panel--open");
+            chev.classList.toggle("dm-chevron--open", open);
+          }
+
+          appendTerminalLine(fileKey, rawText, eventType) {
+            if (!eventType) eventType = "info";
+            const term = document.getElementById(`dm-term-${fileKey}`);
+            if (!term) return;
+            if (eventType === "info" && rawText.trim() === "") return;
+            const text = this.formatLine(rawText, eventType);
+            const line = document.createElement("div");
+            line.className = `dm-term-line dm-term-line--${eventType}`;
+            line.textContent = text;
+            term.appendChild(line);
+            term.scrollTop = term.scrollHeight;
+            this.stats.tests += (eventType === "pass" || eventType === "fail") ? 1 : 0;
+            this.updateSummaryStats();
+          }
+
+          formatLine(text, eventType) {
+            if (eventType === "pass") return "✓ " + text.replace(/^\s*[\.·✓]\s*/, "").trim();
+            // if (eventType === "fail") return "✗ " + text.replace(/^\s*[F!✗]\s*/, "").trim();
+            if (eventType === "fail") return "✗ " + text.replace(/^\s*[\.·✗]\s*/, "").trim();
+            return text;
+          }
+
+          appendSidebarItem(fileKey, type, text) {
+            const container = document.getElementById(`dm-${type}-${fileKey}`);
+            if (!container) return;
+            const item = document.createElement("div");
+            item.className = `dm-sidebar-item dm-sidebar-item--${type}`;
+            item.textContent = text;
+            container.appendChild(item);
+          }
+
+          advanceProgress(fileKey) {
+            const fill = document.getElementById(`dm-prog-${fileKey}`);
+            if (!fill) return;
+            const cur = parseFloat(fill.style.width) || 0;
+            fill.style.width = `${Math.min(95, cur + (95 - cur) * 0.12).toFixed(1)}%`;
+          }
+
+          setFileDot(fileKey, state) {
+             const dot = document.getElementById(`dm-dot-${fileKey}`);
+             if (dot) dot.className = `dm-dot dm-dot--${state}`;
+           }
+
+           setFileLoader(fileKey, show) {
+             const loader = document.getElementById(`dm-loader-${fileKey}`);
+             if (loader) loader.style.display = show ? 'inline-flex' : 'none';
+           }
+
+          setCoverageLabel(fileKey, pct) {
+            const el = document.getElementById(`dm-cov-${fileKey}`);
+            if (el) el.textContent = `${pct}%`;
+          }
+
+          finalizePanel(fileKey, data) {
+             const status = data.status;
+             this.setFileDot(fileKey, status);
+             this.setFileLoader(fileKey, false);
+             const fill = document.getElementById(`dm-prog-${fileKey}`);
+            if (fill) {
+              fill.style.width = "100%";
+              fill.classList.toggle("dm-progress-fill--passed", status === "passed");
+              fill.classList.toggle("dm-progress-fill--failed", status === "failed");
+            }
+            const term = document.getElementById(`dm-term-${fileKey}`);
+            if (term) {
+              const sep = document.createElement("div");
+              sep.className = "dm-term-separator";
+              term.appendChild(sep);
+              const total = (data.passed || 0) + (data.failed || 0);
+              const covStr = data.coverage != null ? ` — coverage ${data.coverage}%` : "";
+              this.appendTerminalLine(
+                fileKey,
+                `${total} example${total !== 1 ? "s" : ""}. ${data.failed || 0} failure${data.failed !== 1 ? "s" : ""}${covStr}`,
+                "summary"
+              );
+            }
+            const meta = document.getElementById(`dm-meta-${fileKey}`);
+            if (meta) meta.innerHTML = this.metaBadges(data);
+            const logLink = document.getElementById(`dm-log-${fileKey}`);
+            if (logLink) logLink.style.display = "inline-flex";
+          }
+
+          metaBadges(data) {
+             const secs = ((data.duration_ms || 0) / 1000).toFixed(2);
+             let html = '';
+             if ((data.n1_count || 0) > 0)
+               html += `<span class="dm-badge dm-badge--n1" title="N+1 issues">${data.n1_count} N+1</span>`;
+             if ((data.slow_count || 0) > 0)
+               html += `<span class="dm-badge dm-badge--slow" title="Slow queries">${data.slow_count} slow</span>`;
+             if (data.coverage != null)
+               html += `<span class="dm-badge dm-badge--cov" title="Coverage">${data.coverage}% cov</span>`;
+             html += `<span class="dm-badge dm-badge--time">${secs}s</span>`;
+             return html;
+           }
+
+          updateSummaryStats() {
+            if (this.hasStatTotalTestsTarget)
+              this.statTotalTestsTarget.textContent = this.stats.tests;
+            if (this.hasStatSlowQueriesTarget)
+              this.statSlowQueriesTarget.textContent = this.stats.slow;
+            if (this.hasStatN1IssuesTarget)
+              this.statN1IssuesTarget.textContent = this.stats.n1;
+            if (this.hasStatCoverageTarget && this.stats.coverageCount > 0)
+              this.statCoverageTarget.textContent =
+                `${(this.stats.coverageSum / this.stats.coverageCount).toFixed(1)}%`;
+          }
+
+          resetState() {
+            this.teardownSubscriptions();
+            this.fileMeta = {};
+            this.stats = { tests: 0, slow: 0, n1: 0, coverageSum: 0, coverageCount: 0 };
+            this.fileListTarget.innerHTML = "";
+            this.updateSummaryStats();
+          }
+
+          teardownSubscriptions() {
+            Object.values(this.subscriptions).forEach(function(s) { if (s) s.unsubscribe(); });
+            this.subscriptions = {};
+            if (this.runSubscription) this.runSubscription.unsubscribe();
+            this.runSubscription = null;
+          }
+        });
+      })();
+    </script>
+    <%# Dashboard panel styles - inlined for engine compatibility %>
+    <style>
+.dm-file-row{border-bottom:1px solid rgba(255,255,255,.06)}.dm-file-row:last-child{border-bottom:none}.dm-file-header{display:flex;align-items:center;gap:8px;padding:10px 16px;cursor:pointer;user-select:none;transition:background .1s;min-height:42px}.dm-file-header:hover{background:rgba(255,255,255,.025)}.dm-chevron{font-size:9px;color:#4b5563;width:12px;flex-shrink:0;transition:transform .15s ease;line-height:1}.dm-chevron--open{transform:rotate(90deg)}.dm-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}.dm-dot--pending{background:#2d3748;border:1px solid #4a5568}.dm-dot--running{background:#f59e0b;animation:dm-pulse 1.2s ease infinite}.dm-dot--passed{background:#10b981}.dm-dot--failed,.dm-dot--error{background:#ef4444}@keyframes dm-pulse{0%,100%{opacity:1}50%{opacity:.3}}.dm-file-name{flex:1;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:12.5px;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dm-file-meta{display:flex;align-items:center;gap:5px;flex-shrink:0}.dm-file-loader{display:inline-flex;align-items:center;margin-left:4px}.dm-progress-bar{height:2px;background:rgba(255,255,255,.04)}.dm-progress-fill{height:100%;background:#f59e0b;transition:width .3s ease-out}.dm-progress-fill--passed{background:#10b981}.dm-progress-fill--failed{background:#ef4444}.dm-panel{display:none;border-top:1px solid rgba(255,255,255,.06);height:260px;overflow:hidden}.dm-panel--open{display:flex}.dm-terminal{flex:1;min-width:0;padding:10px 14px;overflow-y:auto;background:#080d14;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:11.5px;line-height:1.75}.dm-terminal::-webkit-scrollbar{width:4px}.dm-terminal::-webkit-scrollbar-track{background:0 0}.dm-terminal::-webkit-scrollbar-thumb{background:#2d3748;border-radius:2px}.dm-term-line{white-space:pre-wrap;word-break:break-all}.dm-term-line--command{color:#4b5563;font-size:10.5px;margin-bottom:5px}.dm-term-line--pass{color:#4ade80}.dm-term-line--fail,.dm-term-line--error{color:#f87171}.dm-term-line--pending,.dm-term-line--slow{color:#fbbf24}.dm-term-line--info{color:#94a3b8}.dm-term-line--summary{color:#e2e8f0;font-weight:600;padding-top:6px}.dm-term-line--error{color:#f87171}.dm-sidebar{width:200px;border-left:1px solid rgba(255,255,255,.06);overflow-y:auto;padding:10px;background:rgba(0,0,0,.15)}.dm-sidebar::-webkit-scrollbar{width:3px}.dm-sidebar::-webkit-scrollbar-thumb{background:#2d3748;border-radius:2px}.dm-sidebar-section{margin-bottom:12px}.dm-sidebar-label{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px}.dm-sidebar-items{font-size:10px;color:#94a3b8}.dm-sidebar-item{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.15);border-radius:4px;padding:3px 6px;margin-bottom:3px;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:9.5px;word-break:break-all}.dm-sidebar-item--n1{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.15)}.dm-sidebar-cov{font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:12px;font-weight:600;color:#34d399}.dm-sidebar-log{margin-top:auto;padding-top:8px}.dm-log-link{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:#64748b;text-decoration:none;transition:color .15s}.dm-log-link:hover{color:#94a3b8}.dm-badge{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;white-space:nowrap}.dm-badge--time{background:rgba(100,116,139,.2);color:#94a3b8}.dm-badge--n1{background:rgba(239,68,68,.15);color:#fca5a5}.dm-badge--slow{background:rgba(251,191,36,.15);color:#fde68a}.dm-badge--cov{background:rgba(52,211,153,.15);color:#6ee7b7}.dm-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px}.dm-term-separator{height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.12),transparent);margin:6px 0}.dm-spinner{display:inline-block;border:2px solid rgba(255,255,255,.15);border-top-color:#22C55E;border-radius:50%;animation:dm-spin .7s linear infinite}.dm-spinner--xs{width:10px;height:10px;border-width:1.5px}.dm-spinner--sm{width:14px;height:14px;border-width:2px}.dm-spinner--md{width:18px;height:18px;border-width:2px}@keyframes dm-spin{to{transform:rotate(360deg)}}
+    </style>
 
     <style>
       :root {
@@ -245,7 +661,7 @@
               <path d="M7 14h4l3-6 3 12 3-6h1" stroke="#22C55E" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             <span style="font-family:var(--font-mono); font-weight:700; font-size:1rem; color:var(--text-primary); letter-spacing:-0.01em;">
-              DevMetrics<span style="color:var(--green);">Live</span>
+              <span style="color:var(--green);">Dev</span>Metrics
             </span>
           </a>
         </div>

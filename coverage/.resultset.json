@@ -1,6 +1,114 @@
 {
   "RSpec": {
     "coverage": {
+      "/home/starklord/Projects/rails/devmetrics/app/controllers/devmetrics/metrics_controller.rb": {
+        "lines": [
+          1,
+          1,
+          1,
+          null,
+          null,
+          1,
+          0,
+          0,
+          0,
+          null,
+          0,
+          null,
+          null,
+          null,
+          1,
+          0,
+          0,
+          null,
+          0,
+          null,
+          null,
+          null,
+          0,
+          null,
+          null,
+          null,
+          null,
+          null,
+          1,
+          0,
+          null,
+          null,
+          0,
+          0,
+          null,
+          0,
+          null,
+          null,
+          null
+        ],
+        "branches": {
+          "[:if, 0, 8, 6, 12, 9]": {
+            "[:then, 1, 9, 8, 9, 77]": 0,
+            "[:else, 2, 11, 8, 11, 46]": 0
+          },
+          "[:unless, 3, 17, 6, 17, 79]": {
+            "[:else, 4, 17, 6, 17, 79]": 0,
+            "[:then, 5, 17, 6, 17, 68]": 0
+          },
+          "[:\"&.\", 6, 33, 66, 33, 82]": {
+            "[:then, 7, 33, 66, 33, 82]": 0,
+            "[:else, 8, 33, 66, 33, 82]": 0
+          },
+          "[:unless, 9, 33, 6, 33, 82]": {
+            "[:else, 10, 33, 6, 33, 82]": 0,
+            "[:then, 11, 33, 6, 33, 58]": 0
+          },
+          "[:unless, 12, 34, 6, 34, 98]": {
+            "[:else, 13, 34, 6, 34, 98]": 0,
+            "[:then, 14, 34, 6, 34, 62]": 0
+          }
+        }
+      },
+      "/home/starklord/Projects/rails/devmetrics/app/models/devmetrics/run.rb": {
+        "lines": [
+          1,
+          1,
+          1,
+          null,
+          1,
+          null,
+          1,
+          null,
+          null,
+          1,
+          0,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "branches": {}
+      },
+      "/home/starklord/Projects/rails/devmetrics/app/models/devmetrics/file_result.rb": {
+        "lines": [
+          1,
+          1,
+          1,
+          null,
+          1,
+          null,
+          1,
+          null,
+          null,
+          1,
+          0,
+          null,
+          null,
+          null
+        ],
+        "branches": {}
+      },
       "/home/starklord/Projects/rails/devmetrics/app/channels/application_cable/channel.rb": {
         "lines": [
           0,
@@ -72,50 +180,6 @@
       },
       "/home/starklord/Projects/rails/devmetrics/app/controllers/devmetrics/application_controller.rb": {
         "lines": [
-          0,
-          0,
-          0,
-          0,
-          null,
-          0,
-          0,
-          0,
-          0
-        ],
-        "branches": {}
-      },
-      "/home/starklord/Projects/rails/devmetrics/app/controllers/devmetrics/metrics_controller.rb": {
-        "lines": [
-          0,
-          0,
-          0,
-          0,
-          null,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          null,
-          0,
-          0,
-          0,
-          null,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          null,
-          0,
-          0,
           0,
           0,
           0,
@@ -626,49 +690,6 @@
         ],
         "branches": {}
       },
-      "/home/starklord/Projects/rails/devmetrics/app/models/devmetrics/file_result.rb": {
-        "lines": [
-          0,
-          0,
-          0,
-          null,
-          0,
-          null,
-          0,
-          0,
-          null,
-          0,
-          0,
-          0,
-          0,
-          0
-        ],
-        "branches": {}
-      },
-      "/home/starklord/Projects/rails/devmetrics/app/models/devmetrics/run.rb": {
-        "lines": [
-          0,
-          0,
-          0,
-          null,
-          0,
-          null,
-          0,
-          0,
-          null,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0
-        ],
-        "branches": {}
-      },
       "/home/starklord/Projects/rails/devmetrics/app/models/devmetrics/slow_query.rb": {
         "lines": [
           0,
@@ -1149,6 +1170,6 @@
         "branches": {}
       }
     },
-    "timestamp": 1773964076
+    "timestamp": 1773965476
   }
 }

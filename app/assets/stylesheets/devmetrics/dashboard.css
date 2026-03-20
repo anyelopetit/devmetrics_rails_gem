@@ -225,3 +225,49 @@
   color: #34d399;
   border: 1px solid rgba(52, 211, 153, 0.25);
 }
+
+/* ── Mode Indicator ────────────────────────────────────────── */
+.dm-mode-indicator {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  background: #1a1a2e;
+  border: 1px solid #fbbf24;
+  color: #fbbf24;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 9999;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.dm-mode-indicator--realtime {
+  background: #0a1929;
+  border-color: #10b981;
+  color: #10b981;
+}
+.dm-mode-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.dm-mode-indicator--realtime .dm-mode-dot {
+  animation: dm-pulse 1.5s ease infinite;
+}
+.dm-retry-btn {
+  background: transparent;
+  border: 1px solid currentColor;
+  color: inherit;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.dm-retry-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}

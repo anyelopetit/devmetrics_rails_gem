@@ -2,7 +2,7 @@ module Devmetrics
   class Run < ActiveRecord::Base
     self.table_name = "devmetrics_runs"
 
-    enum :status, { pending: 0, running: 1, completed: 2, failed: 3 }
+    enum status: { pending: 0, running: 1, completed: 2, failed: 3 }
 
     has_many :file_results, foreign_key: :run_id, primary_key: :run_id,
              class_name: "Devmetrics::FileResult"

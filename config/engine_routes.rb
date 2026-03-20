@@ -7,8 +7,4 @@ Devmetrics::Engine.routes.draw do
 
   get  "playground",     to: "playground#run"
   post "playground/run", to: "playground#run"
-
-  get "/up", to: "rails/health#show", as: :health
-
-  mount ActionCable.server => "/cable"
 end

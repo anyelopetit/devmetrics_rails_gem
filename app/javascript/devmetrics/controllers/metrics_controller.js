@@ -210,7 +210,7 @@ export default class extends Controller {
 
   formatLine(text, eventType) {
     if (eventType === "pass") return "✓ " + text.replace(/^\s*[\.·✓]\s*/, "").trim()
-    if (eventType === "fail") return "✗ " + text.replace(/^\s*[F!✗]\s*/, "").trim()
+    if (eventType === "fail") return "✗ " + text.replace(/^\s*[\.·✗]\s*/, "").trim()
     return text
   }
 
