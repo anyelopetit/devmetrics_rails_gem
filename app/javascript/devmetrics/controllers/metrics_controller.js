@@ -83,6 +83,8 @@ export default class extends Controller {
 
       case "file_started": {
         this.setFileDot(fileKey, "running")
+        const loader = document.getElementById(`dm-loader-${fileKey}`)
+        if (loader) loader.style.display = "inline-flex"
         const meta = this.fileMeta[fileKey]
         const path = meta?.display_name || fileKey
         this.appendTerminalLine(fileKey, `$ bundle exec rspec ${path} --format documentation`, "command")
@@ -117,11 +119,14 @@ export default class extends Controller {
         this.updateSummaryStats()
         break
 
-      case "file_complete":
+      case "file_complete": {
+        const loader2 = document.getElementById(`dm-loader-${fileKey}`)
+        if (loader2) loader2.style.display = "none"
         this.finalizePanel(fileKey, data)
         this.subscriptions[fileKey]?.unsubscribe()
         delete this.subscriptions[fileKey]
         break
+      }
 
       case "file_error":
         this.setFileDot(fileKey, "error")
@@ -149,6 +154,9 @@ export default class extends Controller {
         <span class="dm-dot dm-dot--pending" id="dm-dot-${fileKey}"></span>
         <span class="dm-file-name">${displayName}</span>
         <span class="dm-file-meta" id="dm-meta-${fileKey}"></span>
+        <span class="dm-file-loader" id="dm-loader-${fileKey}" style="display:none">
+          <span class="dm-spinner dm-spinner--xs"></span>
+        </span>
       </div>
 
       <div class="dm-progress-bar">
@@ -158,23 +166,40 @@ export default class extends Controller {
       <div class="dm-panel" id="dm-panel-${fileKey}">
         <div class="dm-terminal" id="dm-term-${fileKey}"></div>
         <div class="dm-sidebar">
-          <div class="dm-sidebar-section">
-            <div class="dm-sidebar-label">Slow Queries</div>
+
+          <div class="dm-sidebar-stat">
+            <div class="dm-sidebar-stat-hd">
+              <svg class="dm-sidebar-icon dm-sidebar-icon--slow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2 4 9h4.5L6.5 14 12 7H7.5L9.5 2Z"/></svg>
+              <span class="dm-sidebar-label">Slow Queries</span>
+              <span class="dm-sidebar-value dm-sidebar-value--slow" id="dm-slow-count-${fileKey}">0</span>
+            </div>
             <div id="dm-slow-${fileKey}" class="dm-sidebar-items"></div>
           </div>
-          <div class="dm-sidebar-section">
-            <div class="dm-sidebar-label">N+1 Issues</div>
+
+          <div class="dm-sidebar-stat">
+            <div class="dm-sidebar-stat-hd">
+              <svg class="dm-sidebar-icon dm-sidebar-icon--n1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 2 13h12L8 2Z"/><line x1="8" y1="7.5" x2="8" y2="9.5"/><circle cx="8" cy="11.5" r="0.6" fill="currentColor" stroke="none"/></svg>
+              <span class="dm-sidebar-label">N+1 Issues</span>
+              <span class="dm-sidebar-value dm-sidebar-value--n1" id="dm-n1-count-${fileKey}">0</span>
+            </div>
             <div id="dm-n1-${fileKey}" class="dm-sidebar-items"></div>
           </div>
-          <div class="dm-sidebar-section">
-            <div class="dm-sidebar-label">Coverage</div>
-            <div id="dm-cov-${fileKey}" class="dm-sidebar-cov">—</div>
+
+          <div class="dm-sidebar-stat">
+            <div class="dm-sidebar-stat-hd">
+              <svg class="dm-sidebar-icon dm-sidebar-icon--cov" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 3 4v4c0 3 2.5 5 5 6 2.5-1 5-3 5-6V4L8 2Z"/><polyline points="5.5,8 7.5,10 10.5,7"/></svg>
+              <span class="dm-sidebar-label">Coverage</span>
+              <span class="dm-sidebar-value dm-sidebar-value--cov" id="dm-cov-${fileKey}">—</span>
+            </div>
           </div>
-          <div class="dm-sidebar-section dm-sidebar-log">
+
+          <div class="dm-sidebar-log">
             <a href="${this.logDownloadUrl(runId, fileKey)}" class="dm-log-link" id="dm-log-${fileKey}" style="display:none">
-              ↓ Download log
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:11px;height:11px;flex-shrink:0"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M3 12h10"/></svg>
+              Download log
             </a>
           </div>
+
         </div>
       </div>
     `
@@ -221,6 +246,9 @@ export default class extends Controller {
     item.className = `dm-sidebar-item dm-sidebar-item--${type}`
     item.textContent = text
     container.appendChild(item)
+
+    const counter = document.getElementById(`dm-${type}-count-${fileKey}`)
+    if (counter) counter.textContent = container.children.length
   }
 
   advanceProgress(fileKey) {
@@ -278,13 +306,14 @@ export default class extends Controller {
 
   metaBadges(data) {
     const secs = ((data.duration_ms || 0) / 1000).toFixed(2)
-    let html = `<span class="dm-badge dm-badge--time">${secs}s</span>`
+    let html = ''
     if ((data.n1_count || 0) > 0)
-      html += `<span class="dm-badge dm-badge--n1">${data.n1_count} N+1</span>`
+      html += `<span class="dm-badge dm-badge--n1" title="N+1 issues">${data.n1_count} N+1</span>`
     if ((data.slow_count || 0) > 0)
-      html += `<span class="dm-badge dm-badge--slow">${data.slow_count} slow</span>`
+      html += `<span class="dm-badge dm-badge--slow" title="Slow queries">${data.slow_count} slow</span>`
     if (data.coverage != null)
-      html += `<span class="dm-badge dm-badge--cov">${data.coverage}% cov</span>`
+      html += `<span class="dm-badge dm-badge--cov" title="Coverage">${data.coverage}%</span>`
+    html += `<span class="dm-badge dm-badge--time" title="Duration">${secs}s</span>`
     return html
   }
 

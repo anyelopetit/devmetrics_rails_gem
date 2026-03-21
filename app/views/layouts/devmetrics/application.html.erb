@@ -227,14 +227,14 @@
               case "slow_query": {
                 const text = `${data.query.sql} (${data.query.ms}ms)`;
                 this.appendTerminalLine(fileKey, `SLOW: ${text}`, "slow");
-                this.appendSidebarItem(fileKey, "slow", text);
+                this.incrementSidebarValue(fileKey, "slow");
                 this.stats.slow++;
                 this.updateSummaryStats();
                 break;
               }
               case "n1_detected":
                 this.appendTerminalLine(fileKey, `N+1 detected: ${data.message}`, "n1");
-                this.appendSidebarItem(fileKey, "n1", data.message);
+                this.incrementSidebarValue(fileKey, "n1");
                 this.stats.n1++;
                 this.updateSummaryStats();
                 break;
@@ -268,11 +268,13 @@
           panelTemplate(fileKey, displayName, runId) {
             return `
               <div class="dm-file-header" data-action="click->metrics#togglePanel" data-file-key="${fileKey}">
-                <span class="dm-chevron" id="dm-chev-${fileKey}">▶</span>
+                <span class="dm-chevron" id="dm-chev-${fileKey}">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </span>
                 <span class="dm-dot dm-dot--pending" id="dm-dot-${fileKey}"></span>
                 <span class="dm-file-name">${displayName}</span>
                 <span class="dm-file-meta" id="dm-meta-${fileKey}"></span>
-                <span class="dm-file-loader" id="dm-loader-${fileKey}" style="display:none;">
+                <span class="dm-file-loader" id="dm-loader-${fileKey}">
                   <span class="dm-spinner dm-spinner--xs"></span>
                 </span>
               </div>
@@ -282,21 +284,39 @@
               <div class="dm-panel" id="dm-panel-${fileKey}">
                 <div class="dm-terminal" id="dm-term-${fileKey}"></div>
                 <div class="dm-sidebar">
-                  <div class="dm-sidebar-section">
-                    <div class="dm-sidebar-label">Slow Queries</div>
-                    <div id="dm-slow-${fileKey}" class="dm-sidebar-items"></div>
+                  <div class="dm-sidebar-stats">
+                    <div class="dm-sidebar-stat">
+                      <div class="dm-sidebar-icon dm-sidebar-icon--slow">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                      </div>
+                      <div class="dm-sidebar-content">
+                        <span class="dm-sidebar-value" id="dm-slow-${fileKey}">0</span>
+                        <span class="dm-sidebar-label">Slow</span>
+                      </div>
+                    </div>
+                    <div class="dm-sidebar-stat">
+                      <div class="dm-sidebar-icon dm-sidebar-icon--n1">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M9 9h6v6H9z"/><path d="M14 14h2v2h-2z"/></svg>
+                      </div>
+                      <div class="dm-sidebar-content">
+                        <span class="dm-sidebar-value" id="dm-n1-${fileKey}">0</span>
+                        <span class="dm-sidebar-label">N+1</span>
+                      </div>
+                    </div>
+                    <div class="dm-sidebar-stat">
+                      <div class="dm-sidebar-icon dm-sidebar-icon--cov">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                      </div>
+                      <div class="dm-sidebar-content">
+                        <span class="dm-sidebar-value" id="dm-cov-${fileKey}">—</span>
+                        <span class="dm-sidebar-label">Coverage</span>
+                      </div>
+                    </div>
                   </div>
-                  <div class="dm-sidebar-section">
-                    <div class="dm-sidebar-label">N+1 Issues</div>
-                    <div id="dm-n1-${fileKey}" class="dm-sidebar-items"></div>
-                  </div>
-                  <div class="dm-sidebar-section">
-                    <div class="dm-sidebar-label">Coverage</div>
-                    <div id="dm-cov-${fileKey}" class="dm-sidebar-cov">—</div>
-                  </div>
-                  <div class="dm-sidebar-section dm-sidebar-log">
-                    <a href="/devmetrics/runs/${runId}/logs/${fileKey}/download" class="dm-log-link" id="dm-log-${fileKey}" style="display:none">
-                      ↓ Download log
+                  <div class="dm-sidebar-footer">
+                    <a href="/devmetrics/runs/${runId}/logs/${fileKey}/download" class="dm-log-link" id="dm-log-${fileKey}">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                      Download log
                     </a>
                   </div>
                 </div>
@@ -306,10 +326,12 @@
 
           togglePanel(fileKey) {
             if (typeof fileKey !== "string") fileKey = fileKey.currentTarget.dataset.fileKey;
-            const panel = document.getElementById(`dm-panel-${fileKey}`);
-            const chev  = document.getElementById(`dm-chev-${fileKey}`);
-            const open  = panel.classList.toggle("dm-panel--open");
+            const panel  = document.getElementById(`dm-panel-${fileKey}`);
+            const chev   = document.getElementById(`dm-chev-${fileKey}`);
+            const header = document.querySelector(`#dm-file-${fileKey} .dm-file-header`);
+            const open   = panel.classList.toggle("dm-panel--open");
             chev.classList.toggle("dm-chevron--open", open);
+            header.classList.toggle("dm-file-header--open", open);
           }
 
           appendTerminalLine(fileKey, rawText, eventType) {
@@ -330,7 +352,7 @@
           formatLine(text, eventType) {
             if (eventType === "pass") return "✓ " + text.replace(/^\s*[\.·✓]\s*/, "").trim();
             // if (eventType === "fail") return "✗ " + text.replace(/^\s*[F!✗]\s*/, "").trim();
-            if (eventType === "fail") return "✗ " + text.replace(/^\s*[\.·✗]\s*/, "").trim();
+            // if (eventType === "fail") return "✗ " + text.replace(/^\s*[\.·✗]\s*/, "").trim();
             return text;
           }
 
@@ -341,6 +363,15 @@
             item.className = `dm-sidebar-item dm-sidebar-item--${type}`;
             item.textContent = text;
             container.appendChild(item);
+          }
+
+          incrementSidebarValue(fileKey, type) {
+            const el = document.getElementById(`dm-${type}-${fileKey}`);
+            if (!el) return;
+            const current = parseInt(el.textContent) || 0;
+            el.textContent = current + 1;
+            el.classList.add(`dm-sidebar-value--highlight`);
+            setTimeout(() => el.classList.remove(`dm-sidebar-value--highlight`), 300);
           }
 
           advanceProgress(fileKey) {
@@ -396,15 +427,36 @@
 
           metaBadges(data) {
              const secs = ((data.duration_ms || 0) / 1000).toFixed(2);
-             let html = '';
-             if ((data.n1_count || 0) > 0)
-               html += `<span class="dm-badge dm-badge--n1" title="N+1 issues">${data.n1_count} N+1</span>`;
-             if ((data.slow_count || 0) > 0)
-               html += `<span class="dm-badge dm-badge--slow" title="Slow queries">${data.slow_count} slow</span>`;
-             if (data.coverage != null)
-               html += `<span class="dm-badge dm-badge--cov" title="Coverage">${data.coverage}% cov</span>`;
-             html += `<span class="dm-badge dm-badge--time">${secs}s</span>`;
-             return html;
+             const n1Count = data.n1_count || 0;
+             const slowCount = data.slow_count || 0;
+             const coverage = data.coverage;
+
+             return `
+               <div class="dm-meta-badges">
+                 ${n1Count > 0 ? `
+                   <span class="dm-meta-badge dm-meta-badge--n1" title="N+1 issues detected">
+                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M9 9h6v6H9z"/></svg>
+                     <span>${n1Count}</span>
+                   </span>
+                 ` : ''}
+                 ${slowCount > 0 ? `
+                   <span class="dm-meta-badge dm-meta-badge--slow" title="Slow queries detected">
+                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                     <span>${slowCount}</span>
+                   </span>
+                 ` : ''}
+                 ${coverage != null ? `
+                   <span class="dm-meta-badge dm-meta-badge--cov" title="Code coverage">
+                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                     <span>${coverage}%</span>
+                   </span>
+                 ` : ''}
+                 <span class="dm-meta-badge dm-meta-badge--time" title="Test duration">
+                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                   <span>${secs}s</span>
+                 </span>
+               </div>
+             `;
            }
 
           updateSummaryStats() {
@@ -438,7 +490,7 @@
     </script>
     <%# Dashboard panel styles - inlined for engine compatibility %>
     <style>
-.dm-file-row{border-bottom:1px solid rgba(255,255,255,.06)}.dm-file-row:last-child{border-bottom:none}.dm-file-header{display:flex;align-items:center;gap:8px;padding:10px 16px;cursor:pointer;user-select:none;transition:background .1s;min-height:42px}.dm-file-header:hover{background:rgba(255,255,255,.025)}.dm-chevron{font-size:9px;color:#4b5563;width:12px;flex-shrink:0;transition:transform .15s ease;line-height:1}.dm-chevron--open{transform:rotate(90deg)}.dm-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}.dm-dot--pending{background:#2d3748;border:1px solid #4a5568}.dm-dot--running{background:#f59e0b;animation:dm-pulse 1.2s ease infinite}.dm-dot--passed{background:#10b981}.dm-dot--failed,.dm-dot--error{background:#ef4444}@keyframes dm-pulse{0%,100%{opacity:1}50%{opacity:.3}}.dm-file-name{flex:1;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:12.5px;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dm-file-meta{display:flex;align-items:center;gap:5px;flex-shrink:0}.dm-file-loader{display:inline-flex;align-items:center;margin-left:4px}.dm-progress-bar{height:2px;background:rgba(255,255,255,.04)}.dm-progress-fill{height:100%;background:#f59e0b;transition:width .3s ease-out}.dm-progress-fill--passed{background:#10b981}.dm-progress-fill--failed{background:#ef4444}.dm-panel{display:none;border-top:1px solid rgba(255,255,255,.06);height:260px;overflow:hidden}.dm-panel--open{display:flex}.dm-terminal{flex:1;min-width:0;padding:10px 14px;overflow-y:auto;background:#080d14;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:11.5px;line-height:1.75}.dm-terminal::-webkit-scrollbar{width:4px}.dm-terminal::-webkit-scrollbar-track{background:0 0}.dm-terminal::-webkit-scrollbar-thumb{background:#2d3748;border-radius:2px}.dm-term-line{white-space:pre-wrap;word-break:break-all}.dm-term-line--command{color:#4b5563;font-size:10.5px;margin-bottom:5px}.dm-term-line--pass{color:#4ade80}.dm-term-line--fail,.dm-term-line--error{color:#f87171}.dm-term-line--pending,.dm-term-line--slow{color:#fbbf24}.dm-term-line--info{color:#94a3b8}.dm-term-line--summary{color:#e2e8f0;font-weight:600;padding-top:6px}.dm-term-line--error{color:#f87171}.dm-sidebar{width:200px;border-left:1px solid rgba(255,255,255,.06);overflow-y:auto;padding:10px;background:rgba(0,0,0,.15)}.dm-sidebar::-webkit-scrollbar{width:3px}.dm-sidebar::-webkit-scrollbar-thumb{background:#2d3748;border-radius:2px}.dm-sidebar-section{margin-bottom:12px}.dm-sidebar-label{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px}.dm-sidebar-items{font-size:10px;color:#94a3b8}.dm-sidebar-item{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.15);border-radius:4px;padding:3px 6px;margin-bottom:3px;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:9.5px;word-break:break-all}.dm-sidebar-item--n1{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.15)}.dm-sidebar-cov{font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:12px;font-weight:600;color:#34d399}.dm-sidebar-log{margin-top:auto;padding-top:8px}.dm-log-link{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:#64748b;text-decoration:none;transition:color .15s}.dm-log-link:hover{color:#94a3b8}.dm-badge{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;white-space:nowrap}.dm-badge--time{background:rgba(100,116,139,.2);color:#94a3b8}.dm-badge--n1{background:rgba(239,68,68,.15);color:#fca5a5}.dm-badge--slow{background:rgba(251,191,36,.15);color:#fde68a}.dm-badge--cov{background:rgba(52,211,153,.15);color:#6ee7b7}.dm-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px}.dm-term-separator{height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.12),transparent);margin:6px 0}.dm-spinner{display:inline-block;border:2px solid rgba(255,255,255,.15);border-top-color:#22C55E;border-radius:50%;animation:dm-spin .7s linear infinite}.dm-spinner--xs{width:10px;height:10px;border-width:1.5px}.dm-spinner--sm{width:14px;height:14px;border-width:2px}.dm-spinner--md{width:18px;height:18px;border-width:2px}@keyframes dm-spin{to{transform:rotate(360deg)}}
+.dm-file-row{border-bottom:1px solid rgba(255,255,255,.06)}.dm-file-row:last-child{border-bottom:none}.dm-file-header{display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;user-select:none;transition:background .15s ease,border-color .15s ease;min-height:48px;border-left:3px solid transparent}.dm-file-header:hover{background:rgba(255,255,255,.03)}.dm-file-header--open{border-left-color:#22C55E;background:rgba(34,197,94,.04)}.dm-chevron{color:#4b5563;width:16px;height:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:transform .2s ease,color .15s ease}.dm-file-header:hover .dm-chevron{color:#94a3b8}.dm-chevron--open{transform:rotate(90deg);color:#22C55E}.dm-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}.dm-dot--pending{background:#2d3748;border:1px solid #4a5568}.dm-dot--running{background:#f59e0b;animation:dm-pulse 1.2s ease infinite}.dm-dot--passed{background:#10b981}.dm-dot--failed,.dm-dot--error{background:#ef4444}@keyframes dm-pulse{0%,100%{opacity:1}50%{opacity:.3}}.dm-file-name{flex:1;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:12px;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dm-file-meta{display:flex;align-items:center;gap:6px;flex-shrink:0;opacity:0;transition:opacity .2s ease}.dm-file-header--open .dm-file-meta,.dm-file-header:hover .dm-file-meta{opacity:1}.dm-file-loader{display:inline-flex;align-items:center;gap:4px;color:#64748b;font-size:10px}.dm-progress-bar{height:2px;background:rgba(255,255,255,.04)}.dm-progress-fill{height:100%;background:#f59e0b;transition:width .4s ease-out}.dm-progress-fill--passed{background:#10b981}.dm-progress-fill--failed{background:#ef4444}.dm-panel{display:none;border-top:1px solid rgba(255,255,255,.06);height:280px;overflow:hidden}.dm-panel--open{display:flex}.dm-terminal{flex:1;min-width:0;padding:12px 16px;overflow-y:auto;background:#080d14;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:11px;line-height:1.7}.dm-terminal::-webkit-scrollbar{width:4px}.dm-terminal::-webkit-scrollbar-track{background:0 0}.dm-terminal::-webkit-scrollbar-thumb{background:#2d3748;border-radius:2px}.dm-term-line{white-space:pre-wrap;word-break:break-all}.dm-term-line--command{color:#4b5563;font-size:10px;margin:8px 0 4px}.dm-term-line--pass{color:#4ade80}.dm-term-line--fail,.dm-term-line--error{color:#f87171}.dm-term-line--pending,.dm-term-line--slow{color:#fbbf24}.dm-term-line--info{color:#94a3b8}.dm-term-line--summary{color:#e2e8f0;font-weight:600;padding-top:8px}.dm-sidebar{width:180px;border-left:1px solid rgba(255,255,255,.06);background:linear-gradient(180deg,rgba(0,0,0,.15) 0%,rgba(0,0,0,.05) 100%);display:flex;flex-direction:column}.dm-sidebar-stats{display:flex;flex-direction:column;gap:4px;padding:12px}.dm-sidebar-stat{display:flex;align-items:center;gap:10px;padding:10px;background:rgba(255,255,255,.03);border-radius:8px;border:1px solid rgba(255,255,255,.04);transition:background .15s ease,border-color .15s ease}.dm-sidebar-stat:hover{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.08)}.dm-sidebar-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}.dm-sidebar-icon--slow{background:rgba(251,191,36,.12);color:#fbbf24}.dm-sidebar-icon--n1{background:rgba(239,68,68,.12);color:#f87171}.dm-sidebar-icon--cov{background:rgba(52,211,153,.12);color:#34d399}.dm-sidebar-content{display:flex;flex-direction:column;gap:1px}.dm-sidebar-value{font-size:18px;font-weight:700;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;color:#e2e8f0;line-height:1}.dm-sidebar-value--highlight{animation:dm-val-pulse .3s ease}.dm-sidebar-value--slow{color:#fbbf24}.dm-sidebar-value--n1{color:#f87171}.dm-sidebar-value--cov{color:#34d399}.dm-sidebar-label{font-size:9px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#64748b}.dm-sidebar-footer{padding:12px;border-top:1px solid rgba(255,255,255,.04);margin-top:auto}.dm-log-link{display:flex;align-items:center;gap:6px;font-size:10px;color:#64748b;text-decoration:none;transition:color .15s ease,background .15s ease,border-color .15s ease;padding:8px 10px;border-radius:6px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.04)}.dm-log-link:hover{color:#94a3b8;background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.08)}@keyframes dm-val-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.15)}}.dm-spinner{display:inline-block;border:2px solid rgba(255,255,255,.15);border-top-color:#22C55E;border-radius:50%;animation:dm-spin .7s linear infinite}.dm-spinner--xs{width:10px;height:10px;border-width:1.5px}.dm-spinner--sm{width:14px;height:14px;border-width:2px}.dm-spinner--md{width:18px;height:18px;border-width:2px}@keyframes dm-spin{to{transform:rotate(360deg)}}.dm-meta-badges{display:flex;align-items:center;gap:4px;flex-wrap:nowrap}.dm-meta-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;white-space:nowrap;transition:transform .15s ease,box-shadow .15s ease}.dm-meta-badge:hover{transform:translateY(-1px)}.dm-meta-badge--n1{background:rgba(239,68,68,.12);color:#f87171;border:1px solid rgba(239,68,68,.2)}.dm-meta-badge--n1:hover{box-shadow:0 2px 8px rgba(239,68,68,.2)}.dm-meta-badge--slow{background:rgba(251,191,36,.12);color:#fbbf24;border:1px solid rgba(251,191,36,.2)}.dm-meta-badge--slow:hover{box-shadow:0 2px 8px rgba(251,191,36,.2)}.dm-meta-badge--cov{background:rgba(52,211,153,.12);color:#34d399;border:1px solid rgba(52,211,153,.2)}.dm-meta-badge--cov:hover{box-shadow:0 2px 8px rgba(52,211,153,.2)}.dm-meta-badge--time{background:rgba(100,116,139,.15);color:#94a3b8;border:1px solid rgba(100,116,139,.2)}
     </style>
 
     <style>
