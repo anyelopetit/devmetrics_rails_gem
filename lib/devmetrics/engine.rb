@@ -2,9 +2,31 @@ module Devmetrics
   class Engine < ::Rails::Engine
     isolate_namespace Devmetrics
 
-    # Specify the layout for namespaced controllers
+    # Use a dedicated routes file so config/routes.rb can be the host-app routes
+    paths["config/routes.rb"] = "config/engine_routes.rb"
+
     config.to_prepare do
       Devmetrics::ApplicationController.layout "devmetrics/application"
+
+      require "devmetrics/log_writer"
+      require "devmetrics/sql_instrumentor"
+      require "devmetrics/run_orchestrator"
+      require "devmetrics/bullet_log_parser"
+
+      # Explicitly require and alias channel for ActionCable/Solid Cable
+      # ActionCable uses constantize which needs the class to be loadable
+      begin
+        require "devmetrics/metrics_channel"
+      rescue LoadError
+        # Already loaded via autoload
+      end
+
+      unless ::Object.const_defined?(:DevmetricsChannel)
+        ::Object.const_set(:DevmetricsChannel, Devmetrics::MetricsChannel)
+      end
+      unless ::Object.const_defined?(:MetricsChannel)
+        ::Object.const_set(:MetricsChannel, Devmetrics::MetricsChannel)
+      end
     end
 
     # ── Asset & View configuration ───────────────────────────────────────────
@@ -30,15 +52,25 @@ module Devmetrics
 
     initializer "devmetrics.assets" do |app|
       if app.config.respond_to?(:assets)
+        app.config.assets.paths << root.join("app/assets/stylesheets")
+        app.config.assets.paths << root.join("app/assets/javascripts")
         app.config.assets.paths << root.join("app/javascript")
+        unless defined?(::Propshaft)
+          app.config.assets.precompile += %w[devmetrics/application.js devmetrics/dashboard.css]
+        end
       end
     end
 
-    # ── Bullet integration ────────────────────────────────────────────────────
-    initializer "devmetrics.bullet", after: :load_config_initializers do
-      if defined?(Bullet)
-        # Bullet setup for standard dev environments
-        # Metrics tracking is managed by PerformanceHelpers during test runs
+    initializer "devmetrics.sql_notifications" do
+      ActiveSupport::Notifications.subscribe("sql.active_record") do |*args|
+        event = ActiveSupport::Notifications::Event.new(*args)
+        Devmetrics::SqlInstrumentor.record(event) if defined?(Devmetrics::SqlInstrumentor)
+      end
+    end
+
+    config.after_initialize do
+      if ENV["DEVMETRICS_SKIP_DB_SETUP"] == "1"
+        Rails.logger.info "[DevMetrics] Database setup skipped for test runs"
       end
     end
   end

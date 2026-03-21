@@ -1,4 +1,4 @@
-class CreatePerformanceRuns < ActiveRecord::Migration[8.0]
+class CreatePerformanceRuns < ActiveRecord::Migration[7.2]
   def change
     create_table :performance_runs do |t|
       t.string :run_id

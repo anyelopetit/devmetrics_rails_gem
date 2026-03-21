@@ -8,6 +8,7 @@
     <meta name="mobile-web-app-capable" content="yes">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
+    <meta name="action-cable-url" content="/cable">
 
     <%= yield :head %>
 
@@ -20,8 +21,511 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-    <%# Styles are inline in this layout for performance %>
-    <%= javascript_importmap_tags "devmetrics" %>
+    <%# Load JS from jsdelivr CDN (UMD builds for global access) %>
+    <script src="https://cdn.jsdelivr.net/npm/@hotwired/turbo@8.0.12/dist/turbo.es2017-umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@hotwired/stimulus@3.2.2/dist/stimulus.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/actioncable@5.2.8-1/lib/assets/compiled/action_cable.js"></script>
+    <script>
+      (function() {
+        if (typeof Stimulus === "undefined" || !Stimulus.Application) return;
+        if (typeof ActionCable === "undefined") return;
+
+        let usePolling = false;
+        let pollingInterval = null;
+        let modeIndicator = null;
+        let consumer = null;
+
+        function showModeIndicator(text, isRealtime) {
+          if (modeIndicator) modeIndicator.remove();
+          modeIndicator = document.createElement('div');
+          modeIndicator.className = 'dm-mode-indicator' + (isRealtime ? ' dm-mode-indicator--realtime' : '');
+          modeIndicator.innerHTML = `
+            <span class="dm-mode-dot"></span>
+            <span>${text}</span>
+            ${!isRealtime ? '<button class="dm-retry-btn" onclick="window.retryWebSocket()">Retry</button>' : ''}
+          `;
+          document.body.appendChild(modeIndicator);
+        }
+
+        function hideModeIndicator() {
+          if (modeIndicator) {
+            modeIndicator.remove();
+            modeIndicator = null;
+          }
+        }
+
+        window.retryWebSocket = function() {
+          usePolling = false;
+          if (pollingInterval) clearInterval(pollingInterval);
+          if (consumer) consumer.disconnect();
+          consumer = ActionCable.createConsumer();
+          if (window.devmetricsApp && window.devmetricsApp.currentRunId) {
+            window.devmetricsApp.subscribeToRun(window.devmetricsApp.currentRunId);
+          }
+          showModeIndicator('Connecting...', true);
+          setTimeout(() => {
+            if (!usePolling) showModeIndicator('Using Solid Cable', true);
+          }, 2000);
+        };
+
+        const app = Stimulus.Application.start();
+
+        app.register("metrics", class extends Stimulus.Controller {
+          static targets = ["runBtn", "fileList", "statTotalTests", "statSlowQueries", "statN1Issues", "statCoverage"];
+
+          connect() {
+            this.subscriptions = {};
+            this.runSubscription = null;
+            this.fileMeta = {};
+            this.stats = { tests: 0, slow: 0, n1: 0, coverageSum: 0, coverageCount: 0 };
+            this.currentRunId = null;
+            window.devmetricsApp = this;
+            this.initConnection();
+          }
+
+          disconnect() {
+            this.teardownSubscriptions();
+            if (pollingInterval) clearInterval(pollingInterval);
+            if (consumer) consumer.disconnect();
+          }
+
+          initConnection() {
+            if (typeof ActionCable === "undefined") {
+              this.enablePollingMode();
+              return;
+            }
+            try {
+              consumer = ActionCable.createConsumer();
+              showModeIndicator('Connecting...', true);
+              const timeout = setTimeout(() => {
+                if (usePolling === false) {
+                  this.enablePollingMode();
+                }
+              }, 3000);
+              this.testConnection = () => {
+                clearTimeout(timeout);
+                showModeIndicator('Using Solid Cable', true);
+              };
+              setTimeout(() => this.testConnection(), 1000);
+            } catch (e) {
+              this.enablePollingMode();
+            }
+          }
+
+          enablePollingMode() {
+            if (usePolling) return;
+            usePolling = true;
+            showModeIndicator('Using Polling mode', false);
+          }
+
+          async pollStatus() {
+            if (!usePolling || !this.currentRunId) return;
+            try {
+              const mount = this.element.closest("[data-devmetrics-mount-path]")
+                ?.dataset.devmetricsMountPath || "/devmetrics";
+              const resp = await fetch(`${mount}/runs/${this.currentRunId}/status`);
+              const data = await resp.json();
+              this.updateFromStatus(data);
+              if (data.status === 'running') {
+                pollingInterval = setTimeout(() => this.pollStatus(), 1000);
+              }
+            } catch (err) {
+              console.error('Polling error:', err);
+            }
+          }
+
+           updateFromStatus(data) {
+             if (data.files) {
+               data.files.forEach(f => {
+                 if (f.status === 'passed' || f.status === 'failed') {
+                   this.setFileDot(f.file_key, f.status);
+                   this.setFileLoader(f.file_key, false);
+                   this.updateFileStats(f.file_key, f);
+                 }
+               });
+             }
+             if (data.status === 'completed' || data.status === 'failed') {
+               this.runBtnTarget.disabled = false;
+               this.runBtnTarget.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5,3 19,12 5,21"/></svg> Run performance tests`;
+             }
+           }
+
+           updateFileStats(fileKey, data) {
+             const slowEl = document.getElementById(`dm-slow-${fileKey}`);
+             const n1El = document.getElementById(`dm-n1-${fileKey}`);
+             const covEl = document.getElementById(`dm-cov-${fileKey}`);
+             if (slowEl) slowEl.textContent = data.slow_query_count || 0;
+             if (n1El) n1El.textContent = data.n1_count || 0;
+             if (covEl) covEl.textContent = data.coverage != null ? `${data.coverage}%` : '—';
+           }
+
+            async runTests() {
+              this.runBtnTarget.disabled = true;
+              this.runBtnTarget.innerHTML = `<span class="dm-spinner dm-spinner--sm"></span> Starting…`;
+
+              if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+              }
+              this.teardownSubscriptions();
+
+              if (this.fileListTarget) {
+                this.fileListTarget.innerHTML = "";
+              }
+
+              this.fileMeta = {};
+              this.stats = { tests: 0, slow: 0, n1: 0, coverageSum: 0, coverageCount: 0 };
+              this.currentRunId = null;
+              this.updateSummaryStats();
+
+              await Promise.resolve();
+
+            try {
+              const mount = this.element.closest("[data-devmetrics-mount-path]")
+                ?.dataset.devmetricsMountPath || "/devmetrics";
+              const resp = await fetch(`${mount}/run_tests`, {
+                method: "POST",
+                headers: {
+                  "X-CSRF-Token": document.querySelector("meta[name='csrf-token']")?.content || "",
+                  "Content-Type": "application/json"
+                }
+              });
+              const data = await resp.json();
+              if (!resp.ok) throw new Error(data.error || "Failed to start run");
+               this.currentRunId = data.run_id;
+               this.runBtnTarget.innerHTML = `<span class="dm-spinner dm-spinner--sm"></span> Running (${data.files.length} files)`;
+              data.files.forEach(f => {
+                this.fileMeta[f.file_key] = f;
+                this.createFilePanel(f.file_key, f.display_name, data.run_id);
+              });
+              if (usePolling) {
+                pollingInterval = setTimeout(() => this.pollStatus(), 1000);
+              } else {
+                this.subscribeToRun(data.run_id);
+                data.files.forEach(f => this.subscribeToFile(f.file_key, data.run_id));
+              }
+             } catch (err) {
+               this.runBtnTarget.disabled = false;
+               this.runBtnTarget.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5,3 19,12 5,21"/></svg> Run performance tests`;
+               console.error("DevMetrics run error:", err);
+             }
+           }
+
+          subscribeToRun(runId) {
+            this.runSubscription = consumer.subscriptions.create(
+              { channel: "DevmetricsChannel", stream_type: "run", run_id: runId },
+              { received: (data) => this.handleRunEvent(data) }
+            );
+          }
+
+           handleRunEvent(data) {
+             if (data.type === "run_complete") {
+               this.runBtnTarget.disabled = false;
+               this.runBtnTarget.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5,3 19,12 5,21"/></svg> Run performance tests`;
+               hideModeIndicator();
+               if (this.runSubscription) this.runSubscription.unsubscribe();
+             }
+           }
+
+          subscribeToFile(fileKey, runId) {
+            const sub = consumer.subscriptions.create(
+              { channel: "DevmetricsChannel", stream_type: "file", file_key: fileKey, run_id: runId },
+              { received: (data) => this.handleFileEvent(fileKey, data) }
+            );
+            this.subscriptions[fileKey] = sub;
+          }
+
+           handleFileEvent(fileKey, data) {
+             switch (data.type) {
+               case "file_started": {
+                 this.setFileDot(fileKey, "running");
+                 this.setFileLoader(fileKey, true);
+                 const meta = this.fileMeta[fileKey];
+                 const path = meta && meta.display_name ? meta.display_name : fileKey;
+                 this.appendTerminalLine(fileKey, `$ bundle exec rspec ${path} --format documentation`, "command");
+                 break;
+               }
+              case "test_output":
+                this.appendTerminalLine(fileKey, data.line, data.event_type);
+                if (data.event_type === "pass" || data.event_type === "fail") this.advanceProgress(fileKey);
+                break;
+              case "slow_query": {
+                const text = `${data.query.sql} (${data.query.ms}ms)`;
+                this.appendTerminalLine(fileKey, `SLOW: ${text}`, "slow");
+                this.incrementSidebarValue(fileKey, "slow");
+                this.stats.slow++;
+                this.updateSummaryStats();
+                break;
+              }
+              case "n1_detected":
+                this.appendTerminalLine(fileKey, `N+1 detected: ${data.message}`, "n1");
+                this.incrementSidebarValue(fileKey, "n1");
+                this.stats.n1++;
+                this.updateSummaryStats();
+                break;
+              case "coverage_update":
+                this.appendTerminalLine(fileKey, `[COVERAGE] ${data.pct}%`, "cov");
+                this.setCoverageLabelWithHighlight(fileKey, data.pct);
+                this.stats.coverageSum += data.pct;
+                this.stats.coverageCount++;
+                this.updateSummaryStats();
+                break;
+              case "file_complete":
+                this.finalizePanel(fileKey, data);
+                if (this.subscriptions[fileKey]) this.subscriptions[fileKey].unsubscribe();
+                delete this.subscriptions[fileKey];
+                break;
+              case "file_error":
+                this.setFileDot(fileKey, "error");
+                this.appendTerminalLine(fileKey, `ERROR: ${data.message}`, "error");
+                break;
+            }
+          }
+
+          createFilePanel(fileKey, displayName, runId) {
+            const row = document.createElement("div");
+            row.id = `dm-file-${fileKey}`;
+            row.className = "dm-file-row";
+            row.innerHTML = this.panelTemplate(fileKey, displayName, runId);
+            this.fileListTarget.appendChild(row);
+            if (this.fileListTarget.children.length === 1) this.togglePanel(fileKey);
+          }
+
+          panelTemplate(fileKey, displayName, runId) {
+            return `
+              <div class="dm-file-header" data-action="click->metrics#togglePanel" data-file-key="${fileKey}">
+                <span class="dm-chevron" id="dm-chev-${fileKey}">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </span>
+                <span class="dm-dot dm-dot--pending" id="dm-dot-${fileKey}"></span>
+                <span class="dm-file-name">${displayName}</span>
+                <span class="dm-file-meta" id="dm-meta-${fileKey}"></span>
+                <span class="dm-file-loader" id="dm-loader-${fileKey}">
+                  <span class="dm-spinner dm-spinner--xs"></span>
+                </span>
+              </div>
+              <div class="dm-progress-bar">
+                <div class="dm-progress-fill" id="dm-prog-${fileKey}" style="width:0%"></div>
+              </div>
+              <div class="dm-panel" id="dm-panel-${fileKey}">
+                <div class="dm-terminal" id="dm-term-${fileKey}"></div>
+                <div class="dm-sidebar">
+                  <div class="dm-sidebar-stats">
+                    <div class="dm-sidebar-stat">
+                      <div class="dm-sidebar-icon dm-sidebar-icon--slow">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                      </div>
+                      <div class="dm-sidebar-content">
+                        <span class="dm-sidebar-value" id="dm-slow-${fileKey}">0</span>
+                        <span class="dm-sidebar-label">Slow</span>
+                      </div>
+                    </div>
+                    <div class="dm-sidebar-stat">
+                      <div class="dm-sidebar-icon dm-sidebar-icon--n1">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M9 9h6v6H9z"/><path d="M14 14h2v2h-2z"/></svg>
+                      </div>
+                      <div class="dm-sidebar-content">
+                        <span class="dm-sidebar-value" id="dm-n1-${fileKey}">0</span>
+                        <span class="dm-sidebar-label">N+1</span>
+                      </div>
+                    </div>
+                    <div class="dm-sidebar-stat">
+                      <div class="dm-sidebar-icon dm-sidebar-icon--cov">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                      </div>
+                      <div class="dm-sidebar-content">
+                        <span class="dm-sidebar-value dm-sidebar-value--cov" id="dm-cov-${fileKey}">0%</span>
+                        <span class="dm-sidebar-label">Coverage</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="dm-sidebar-footer">
+                    <a href="/devmetrics/runs/${runId}/logs/${fileKey}/download" class="dm-log-link" id="dm-log-${fileKey}">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                      Download log
+                    </a>
+                  </div>
+                </div>
+              </div>
+            `;
+          }
+
+          togglePanel(fileKey) {
+            if (typeof fileKey !== "string") fileKey = fileKey.currentTarget.dataset.fileKey;
+            const panel  = document.getElementById(`dm-panel-${fileKey}`);
+            const chev   = document.getElementById(`dm-chev-${fileKey}`);
+            const header = document.querySelector(`#dm-file-${fileKey} .dm-file-header`);
+            const open   = panel.classList.toggle("dm-panel--open");
+            chev.classList.toggle("dm-chevron--open", open);
+            header.classList.toggle("dm-file-header--open", open);
+          }
+
+          appendTerminalLine(fileKey, rawText, eventType) {
+            if (!eventType) eventType = "info";
+            const term = document.getElementById(`dm-term-${fileKey}`);
+            if (!term) return;
+            if (eventType === "info" && rawText.trim() === "") return;
+            const text = this.formatLine(rawText, eventType);
+            const line = document.createElement("div");
+            line.className = `dm-term-line dm-term-line--${eventType}`;
+            line.textContent = text;
+            term.appendChild(line);
+            term.scrollTop = term.scrollHeight;
+            this.stats.tests += (eventType === "pass" || eventType === "fail") ? 1 : 0;
+            this.updateSummaryStats();
+          }
+
+          formatLine(text, eventType) {
+            if (eventType === "pass") return "✓ " + text.replace(/^\s*[\.·✓]\s*/, "").trim();
+            // if (eventType === "fail") return "✗ " + text.replace(/^\s*[F!✗]\s*/, "").trim();
+            // if (eventType === "fail") return "✗ " + text.replace(/^\s*[\.·✗]\s*/, "").trim();
+            return text;
+          }
+
+          appendSidebarItem(fileKey, type, text) {
+            const container = document.getElementById(`dm-${type}-${fileKey}`);
+            if (!container) return;
+            const item = document.createElement("div");
+            item.className = `dm-sidebar-item dm-sidebar-item--${type}`;
+            item.textContent = text;
+            container.appendChild(item);
+          }
+
+          incrementSidebarValue(fileKey, type) {
+            const el = document.getElementById(`dm-${type}-${fileKey}`);
+            if (!el) return;
+            const current = parseInt(el.textContent) || 0;
+            const newVal = current + 1;
+            el.textContent = newVal;
+            el.classList.add(`dm-sidebar-value--highlight`, `dm-sidebar-value--${type}`);
+            if (newVal > 0) el.classList.add(`dm-sidebar-value--active`);
+            setTimeout(() => el.classList.remove(`dm-sidebar-value--highlight`), 300);
+          }
+
+          advanceProgress(fileKey) {
+            const fill = document.getElementById(`dm-prog-${fileKey}`);
+            if (!fill) return;
+            const cur = parseFloat(fill.style.width) || 0;
+            fill.style.width = `${Math.min(95, cur + (95 - cur) * 0.12).toFixed(1)}%`;
+          }
+
+          setFileDot(fileKey, state) {
+             const dot = document.getElementById(`dm-dot-${fileKey}`);
+             if (dot) dot.className = `dm-dot dm-dot--${state}`;
+           }
+
+           setFileLoader(fileKey, show) {
+             const loader = document.getElementById(`dm-loader-${fileKey}`);
+             if (loader) loader.style.display = show ? 'inline-flex' : 'none';
+           }
+
+          setCoverageLabelWithHighlight(fileKey, pct) {
+            const el = document.getElementById(`dm-cov-${fileKey}`);
+            if (el) {
+              el.textContent = `${pct}%`;
+              el.classList.add(`dm-sidebar-value--highlight`, `dm-sidebar-value--cov`);
+              setTimeout(() => el.classList.remove(`dm-sidebar-value--highlight`), 300);
+            }
+          }
+
+          finalizePanel(fileKey, data) {
+             const status = data.status;
+             this.setFileDot(fileKey, status);
+             this.setFileLoader(fileKey, false);
+             const fill = document.getElementById(`dm-prog-${fileKey}`);
+            if (fill) {
+              fill.style.width = "100%";
+              fill.classList.toggle("dm-progress-fill--passed", status === "passed");
+              fill.classList.toggle("dm-progress-fill--failed", status === "failed");
+            }
+            const term = document.getElementById(`dm-term-${fileKey}`);
+            if (term) {
+              const sep = document.createElement("div");
+              sep.className = "dm-term-separator";
+              term.appendChild(sep);
+              const total = (data.passed || 0) + (data.failed || 0);
+              const covStr = data.coverage != null ? ` — coverage ${data.coverage}%` : "";
+              this.appendTerminalLine(
+                fileKey,
+                `${total} example${total !== 1 ? "s" : ""}. ${data.failed || 0} failure${data.failed !== 1 ? "s" : ""}${covStr}`,
+                "summary"
+              );
+            }
+            const meta = document.getElementById(`dm-meta-${fileKey}`);
+            if (meta) meta.innerHTML = this.metaBadges(data);
+            const logLink = document.getElementById(`dm-log-${fileKey}`);
+            if (logLink) logLink.style.display = "inline-flex";
+          }
+
+          metaBadges(data) {
+             const secs = ((data.duration_ms || 0) / 1000).toFixed(2);
+             const n1Count = data.n1_count || 0;
+             const slowCount = data.slow_count || 0;
+             const coverage = data.coverage;
+
+             return `
+               <div class="dm-meta-badges">
+                 ${n1Count > 0 ? `
+                   <span class="dm-meta-badge dm-meta-badge--n1" title="N+1 issues detected">
+                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z"/><path d="M9 9h6v6H9z"/></svg>
+                     <span>${n1Count}</span>
+                   </span>
+                 ` : ''}
+                 ${slowCount > 0 ? `
+                   <span class="dm-meta-badge dm-meta-badge--slow" title="Slow queries detected">
+                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                     <span>${slowCount}</span>
+                   </span>
+                 ` : ''}
+                 ${coverage != null ? `
+                   <span class="dm-meta-badge dm-meta-badge--cov" title="Code coverage">
+                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                     <span>${coverage}%</span>
+                   </span>
+                 ` : ''}
+                 <span class="dm-meta-badge dm-meta-badge--time" title="Test duration">
+                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                   <span>${secs}s</span>
+                 </span>
+               </div>
+             `;
+           }
+
+          updateSummaryStats() {
+            if (this.hasStatTotalTestsTarget)
+              this.statTotalTestsTarget.textContent = this.stats.tests;
+            if (this.hasStatSlowQueriesTarget)
+              this.statSlowQueriesTarget.textContent = this.stats.slow;
+            if (this.hasStatN1IssuesTarget)
+              this.statN1IssuesTarget.textContent = this.stats.n1;
+            if (this.hasStatCoverageTarget && this.stats.coverageCount > 0)
+              this.statCoverageTarget.textContent =
+                `${(this.stats.coverageSum / this.stats.coverageCount).toFixed(1)}%`;
+          }
+
+          resetState() {
+            this.teardownSubscriptions();
+            this.fileMeta = {};
+            this.stats = { tests: 0, slow: 0, n1: 0, coverageSum: 0, coverageCount: 0 };
+            if (this.fileListTarget) {
+              this.fileListTarget.innerHTML = "";
+            }
+            this.updateSummaryStats();
+          }
+
+          teardownSubscriptions() {
+            Object.values(this.subscriptions).forEach(function(s) { if (s) s.unsubscribe(); });
+            this.subscriptions = {};
+            if (this.runSubscription) this.runSubscription.unsubscribe();
+            this.runSubscription = null;
+          }
+        });
+      })();
+    </script>
+    <%# Dashboard panel styles - inlined for engine compatibility %>
+    <style>
+.dm-file-row{border-bottom:1px solid rgba(255,255,255,.06)}.dm-file-row:last-child{border-bottom:none}.dm-file-header{display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;user-select:none;transition:background .15s ease,border-color .15s ease;min-height:48px;border-left:3px solid transparent}.dm-file-header:hover{background:rgba(255,255,255,.03)}.dm-file-header--open{border-left-color:#22C55E;background:rgba(34,197,94,.04)}.dm-chevron{color:#4b5563;width:16px;height:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:transform .2s ease,color .15s ease}.dm-file-header:hover .dm-chevron{color:#94a3b8}.dm-chevron--open{transform:rotate(90deg);color:#22C55E}.dm-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}.dm-dot--pending{background:#2d3748;border:1px solid #4a5568}.dm-dot--running{background:#f59e0b;animation:dm-pulse 1.2s ease infinite}.dm-dot--passed{background:#10b981}.dm-dot--failed,.dm-dot--error{background:#ef4444}@keyframes dm-pulse{0%,100%{opacity:1}50%{opacity:.3}}.dm-file-name{flex:1;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:12px;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dm-file-meta{display:flex;align-items:center;gap:6px;flex-shrink:0}.dm-file-loader{display:inline-flex;align-items:center;gap:4px;color:#64748b;font-size:10px}.dm-progress-bar{height:2px;background:rgba(255,255,255,.04)}.dm-progress-fill{height:100%;background:#f59e0b;transition:width .4s ease-out}.dm-progress-fill--passed{background:#10b981}.dm-progress-fill--failed{background:#ef4444}.dm-panel{display:none;border-top:1px solid rgba(255,255,255,.06);height:280px;overflow:hidden}.dm-panel--open{display:flex}.dm-terminal{flex:1;min-width:0;padding:12px 16px;overflow-y:auto;background:#080d14;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;font-size:11px;line-height:1.7}.dm-terminal::-webkit-scrollbar{width:4px}.dm-terminal::-webkit-scrollbar-track{background:0 0}.dm-terminal::-webkit-scrollbar-thumb{background:#2d3748;border-radius:2px}.dm-term-line{white-space:pre-wrap;word-break:break-all}.dm-term-line--command{color:#4b5563;font-size:10px;margin:8px 0 4px}.dm-term-line--pass{color:#4ade80}.dm-term-line--fail,.dm-term-line--error{color:#f87171}.dm-term-line--pending,.dm-term-line--slow{color:#fbbf24}.dm-term-line--info{color:#94a3b8}.dm-term-line--summary{color:#e2e8f0;font-weight:600;padding-top:8px}.dm-term-line--cov{color:#34d399;font-weight:600}.dm-sidebar{width:180px;border-left:1px solid rgba(255,255,255,.06);background:linear-gradient(180deg,rgba(0,0,0,.15) 0%,rgba(0,0,0,.05) 100%);display:flex;flex-direction:column}.dm-sidebar-stats{display:flex;flex-direction:column;gap:4px;padding:12px}.dm-sidebar-stat{display:flex;align-items:center;gap:10px;padding:10px;background:rgba(255,255,255,.03);border-radius:8px;border:1px solid rgba(255,255,255,.04);transition:background .15s ease,border-color .15s ease}.dm-sidebar-stat:hover{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.08)}.dm-sidebar-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}.dm-sidebar-icon--slow{background:rgba(251,191,36,.12);color:#fbbf24}.dm-sidebar-icon--n1{background:rgba(239,68,68,.12);color:#f87171}.dm-sidebar-icon--cov{background:rgba(52,211,153,.12);color:#34d399}.dm-sidebar-content{display:flex;flex-direction:column;gap:1px}.dm-sidebar-value{font-size:18px;font-weight:700;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;color:#e2e8f0;line-height:1}.dm-sidebar-value--highlight{animation:dm-val-pulse .3s ease}.dm-sidebar-value--slow{color:#fbbf24}.dm-sidebar-value--n1{color:#f87171}.dm-sidebar-value--cov{color:#34d399}.dm-sidebar-label{font-size:9px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:#64748b}.dm-sidebar-footer{padding:12px;border-top:1px solid rgba(255,255,255,.04);margin-top:auto}.dm-log-link{display:flex;align-items:center;gap:6px;font-size:10px;color:#64748b;text-decoration:none;transition:color .15s ease,background .15s ease,border-color .15s ease;padding:8px 10px;border-radius:6px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.04);width:100%}.dm-log-link:hover{color:#94a3b8;background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.08)}@keyframes dm-val-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.15)}}.dm-spinner{display:inline-block;border:2px solid rgba(255,255,255,.15);border-top-color:#22C55E;border-radius:50%;animation:dm-spin .7s linear infinite}.dm-spinner--xs{width:10px;height:10px;border-width:1.5px}.dm-spinner--sm{width:14px;height:14px;border-width:2px}.dm-spinner--md{width:18px;height:18px;border-width:2px}@keyframes dm-spin{to{transform:rotate(360deg)}}.dm-meta-badges{display:flex;align-items:center;gap:4px;flex-wrap:nowrap}.dm-meta-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:10px;font-weight:600;font-family:"JetBrains Mono","SF Mono","Fira Code",monospace;white-space:nowrap;transition:transform .15s ease,box-shadow .15s ease}.dm-meta-badge:hover{transform:translateY(-1px)}.dm-meta-badge--n1{background:rgba(239,68,68,.12);color:#f87171;border:1px solid rgba(239,68,68,.2)}.dm-meta-badge--n1:hover{box-shadow:0 2px 8px rgba(239,68,68,.2)}.dm-meta-badge--slow{background:rgba(251,191,36,.12);color:#fbbf24;border:1px solid rgba(251,191,36,.2)}.dm-meta-badge--slow:hover{box-shadow:0 2px 8px rgba(251,191,36,.2)}.dm-meta-badge--cov{background:rgba(52,211,153,.12);color:#34d399;border:1px solid rgba(52,211,153,.2)}.dm-meta-badge--cov:hover{box-shadow:0 2px 8px rgba(52,211,153,.2)}.dm-meta-badge--time{background:rgba(100,116,139,.15);color:#94a3b8;border:1px solid rgba(100,116,139,.2)}
+    </style>
 
     <style>
       :root {
@@ -220,6 +724,72 @@
       }
       .fade-in { animation: fadeSlideIn 0.4s ease-out forwards; }
 
+      /* Mode Indicator */
+      .dm-mode-indicator {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        background: rgba(30, 41, 59, 0.95);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+        font-family: 'IBM Plex Sans', system-ui, sans-serif;
+        font-size: 13px;
+        font-weight: 500;
+        color: #e2e8f0;
+        animation: dm-mode-enter 0.3s ease-out;
+      }
+      @keyframes dm-mode-enter {
+        from { opacity: 0; transform: translateY(10px) scale(0.95); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+      }
+      .dm-mode-indicator--realtime {
+        border-color: rgba(34, 197, 94, 0.3);
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4), 0 0 20px rgba(34, 197, 94, 0.1);
+      }
+      .dm-mode-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #64748b;
+        flex-shrink: 0;
+      }
+      .dm-mode-indicator--realtime .dm-mode-dot {
+        background: #22C55E;
+        box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+        animation: dm-mode-pulse 2s ease-in-out infinite;
+      }
+      @keyframes dm-mode-pulse {
+        0%, 100% { box-shadow: 0 0 8px rgba(34, 197, 94, 0.6); }
+        50% { box-shadow: 0 0 16px rgba(34, 197, 94, 0.9); }
+      }
+      .dm-retry-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 10px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 6px;
+        color: #94a3b8;
+        font-size: 11px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      .dm-retry-btn:hover {
+        background: rgba(255, 255, 255, 0.12);
+        color: #e2e8f0;
+        border-color: rgba(255, 255, 255, 0.25);
+      }
+
       /* Prefers reduced motion */
       @media (prefers-reduced-motion: reduce) {
         *, *::before, *::after {
@@ -236,14 +806,14 @@
       <div style="max-width:1280px; margin:0 auto; padding:0 1.5rem; display:flex; align-items:center; justify-content:space-between; height:56px;">
         <div style="display:flex; align-items:center; gap:0.75rem;">
           <!-- Logo mark -->
-          <a href="<%= root_path %>" style="display:flex; align-items:center; gap:0.75rem; text-decoration:none;">
+          <a href="/devmetrics" style="display:flex; align-items:center; gap:0.75rem; text-decoration:none;">
             <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
               <rect width="28" height="28" rx="7" fill="#22C55E" fill-opacity="0.15"/>
               <rect x="1" y="1" width="26" height="26" rx="6" stroke="#22C55E" stroke-opacity="0.4" stroke-width="1"/>
               <path d="M7 14h4l3-6 3 12 3-6h1" stroke="#22C55E" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             <span style="font-family:var(--font-mono); font-weight:700; font-size:1rem; color:var(--text-primary); letter-spacing:-0.01em;">
-              DevMetrics<span style="color:var(--green);">Live</span>
+              <span style="color:var(--green);">Dev</span>Metrics
             </span>
           </a>
         </div>
@@ -253,12 +823,12 @@
             <span class="pulse-dot"></span>
             <span style="font-family:var(--font-mono);">Solid Cable · Active</span>
           </div>
-          <a href="/devmetrics/playground/run" class="btn-primary" style="font-size:0.8rem; padding:0.375rem 0.875rem;">
+          <%# <a href="/devmetrics/playground/run" class="btn-primary" style="font-size:0.8rem; padding:0.375rem 0.875rem;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <polygon points="5,3 19,12 5,21"/>
             </svg>
             Playground
-          </a>
+          </a> %>
         </div>
       </div>
     </nav>

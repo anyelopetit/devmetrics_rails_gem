@@ -10,12 +10,16 @@ require "benchmark"
 require "json"
 require "securerandom"
 
-# Core dependencies for the Engine's assets and dashboard
-require "importmap-rails"
-require "turbo-rails"
-require "stimulus-rails"
-require "propshaft"
-require "bullet"
+# Optional dependencies — loaded if present in host app
+%w[importmap-rails turbo-rails stimulus-rails propshaft bullet].each do |dep|
+  begin
+    require dep
+  rescue LoadError
+    # Optional dependency not available
+  end
+end
+
+require "devmetrics/compatibility"
 
 module Devmetrics
   class Configuration
@@ -148,15 +152,15 @@ end
 if defined?(RSpec) && RSpec.respond_to?(:configure)
   RSpec.configure do |config|
     config.before(:suite) do
-      Devmetrics::PerformanceHelpers.setup_test_run!
+      ::Devmetrics::PerformanceHelpers.setup_test_run!
     end
 
     config.after(:each) do |example|
-      Devmetrics::PerformanceHelpers.log_example_result(example)
+      ::Devmetrics::PerformanceHelpers.log_example_result(example)
     end
 
     config.after(:suite) do
-      Devmetrics::PerformanceHelpers.finish_test_run!
+      ::Devmetrics::PerformanceHelpers.finish_test_run!
     end
   end
 end

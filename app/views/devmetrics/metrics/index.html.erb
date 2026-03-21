@@ -1,96 +1,72 @@
-<%# ============================================================
-    DevMetrics — Dashboard View (Synchronous Log Version)
-    ============================================================ %>
+<%# DevMetrics — Parallel Real-Time Dashboard %>
 
-<div data-controller="devmetrics--metrics">
+<div data-controller="metrics"
+     data-metrics-cable-url-value="/devmetrics/cable"
+     data-devmetrics-mount-path="/devmetrics">
 
-  <%# ── Page header ── %>
+  <%# ── Header ── %>
   <div style="margin-bottom:2rem;">
     <div style="display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:1rem;">
       <div>
         <p style="font-family:var(--font-mono); font-size:0.7rem; font-weight:600; letter-spacing:0.12em; color:var(--green); text-transform:uppercase; margin:0 0 0.375rem;">
-          Rails Profiling · spec/requests · Synchronous
+          Rails Profiling · spec/requests · Parallel Real-Time
         </p>
         <h2 style="font-size:1.75rem; font-weight:700; color:var(--text-primary); margin:0; letter-spacing:-0.02em; line-height:1.2;">
           Performance Dashboard
         </h2>
         <p style="color:var(--text-secondary); font-size:0.875rem; margin:0.375rem 0 0;">
-          Results are saved to <code style="font-family:var(--font-mono); color:#67E8F9;">devmetrics.log</code> on each rspec execution.
+          One background job per spec file, streaming live output via ActionCable.
         </p>
-      </div>
-      <div style="display:flex; align-items:center; gap:0.5rem; font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono);">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:#64748b;">
-          <circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/>
-        </svg>
-        Log file path: <span style="color:var(--text-secondary);"><%= Devmetrics.log_path.to_s.gsub(Rails.root.to_s, ".") %></span>
       </div>
     </div>
   </div>
 
-  <%# ── Run Performance Tests CTA ── %>
+  <%# ── Run CTA ── %>
   <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem; background:rgba(34,197,94,0.06); border:1px solid rgba(34,197,94,0.2); border-radius:12px; padding:1.125rem 1.5rem; margin-bottom:1.75rem;">
     <div style="display:flex; align-items:center; gap:1rem;">
       <div style="display:flex; align-items:center; justify-content:center; width:40px; height:40px; border-radius:10px; background:rgba(34,197,94,0.12); border:1px solid rgba(34,197,94,0.25); flex-shrink:0;">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5,3 19,12 5,21"/></svg>
       </div>
       <div>
-        <p style="font-size:0.9375rem; font-weight:600; color:var(--text-primary); margin:0 0 0.125rem;">Execute Tests & Log Metrics</p>
-        <p style="font-size:0.8125rem; color:var(--text-secondary); margin:0;">Scans <code style="font-family:var(--font-mono); color:#67E8F9;">spec/requests/</code>, instruments SQL/N+1, and populates the log file.</p>
+        <p style="font-size:0.9375rem; font-weight:600; color:var(--text-primary); margin:0 0 0.125rem;">Run all request specs in parallel</p>
+        <p style="font-size:0.8125rem; color:var(--text-secondary); margin:0;">Each file gets its own panel with live terminal, slow queries, N+1 detections, and coverage.</p>
       </div>
     </div>
-    <div style="display:flex; align-items:center; gap:1rem;">
-       <span style="font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono);" data-devmetrics--metrics-target="statusText"></span>
-       <button
-        class="btn-primary"
-        data-action="click->devmetrics--metrics#runTests"
-        data-devmetrics--metrics-target="runButton"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5,3 19,12 5,21"/></svg>
-        Run Performance Tests
-      </button>
+    <button
+      class="btn-primary"
+      data-action="click->metrics#runTests"
+      data-metrics-target="runBtn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5,3 19,12 5,21"/></svg>
+      Run performance tests
+    </button>
+  </div>
+
+  <%# ── Summary stat cards ── %>
+  <div class="dm-summary" data-metrics-target="summary" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:1rem; margin-bottom:1.75rem;">
+    <div class="panel" style="padding:1rem 1.25rem;">
+      <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.375rem;">Tests run</div>
+      <div style="font-size:1.5rem; font-weight:700; color:var(--text-primary);" data-metrics-target="statTotalTests">—</div>
+    </div>
+    <div class="panel" style="padding:1rem 1.25rem;">
+      <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.375rem;">Slow queries</div>
+      <div style="font-size:1.5rem; font-weight:700; color:#fbbf24;" data-metrics-target="statSlowQueries">—</div>
+    </div>
+    <div class="panel" style="padding:1rem 1.25rem;">
+      <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.375rem;">N+1 issues</div>
+      <div style="font-size:1.5rem; font-weight:700; color:#f87171;" data-metrics-target="statN1Issues">—</div>
+    </div>
+    <div class="panel" style="padding:1rem 1.25rem;">
+      <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.375rem;">Avg coverage</div>
+      <div style="font-size:1.5rem; font-weight:700; color:#34d399;" data-metrics-target="statCoverage">—</div>
     </div>
   </div>
 
-  <%# ── Log Output Panel ── %>
-  <div class="panel" style="margin-bottom: 2rem;">
-    <div class="panel-header" style="border-bottom: 1px solid rgba(255,255,255,0.05); padding: 1rem 1.5rem;">
-      <div style="display:flex; align-items:center; gap:0.625rem;">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-          <line x1="16" y1="13" x2="8" y2="13"></line>
-          <line x1="16" y1="17" x2="8" y2="17"></line>
-          <polyline points="10 9 9 9 8 9"></polyline>
-        </svg>
-        <h3 style="font-size:0.875rem; font-weight:600; color:var(--text-primary); margin:0; font-family:var(--font-mono);">devmetrics.log</h3>
-      </div>
-      <div style="display:flex; align-items:center; gap:0.75rem;">
-        <span class="badge badge-green" id="log-status-badge">active</span>
-      </div>
+  <%# ── File panels ── %>
+  <div class="panel" style="overflow:hidden;">
+    <div class="panel-header" style="border-bottom:1px solid rgba(255,255,255,0.05); padding:0.75rem 1.25rem;">
+      <h3 style="font-size:0.875rem; font-weight:600; color:var(--text-primary); margin:0; font-family:var(--font-mono);">Spec files</h3>
     </div>
-
-    <div style="background:#030712; padding:1.25rem; min-height:400px; max-height:600px; overflow-y:auto; border-radius: 0 0 12px 12px;">
-      <pre id="log-output" style="margin:0; font-family:var(--font-mono); font-size:0.8125rem; line-height:1.6; color:#E2E8F0; white-space:pre-wrap; word-break:break-all;" data-devmetrics--metrics-target="logOutput"><%= @log_content %></pre>
-    </div>
-  </div>
-
-  <%# ── Help instructions ── %>
-  <div class="panel" style="padding: 1.5rem;">
-    <h3 style="font-size:1rem; font-weight:700; color:var(--text-primary); margin:0 0 1rem; letter-spacing:-0.01em;">How it works</h3>
-    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem;">
-       <div>
-         <h4 style="font-size:0.875rem; color:var(--green); margin-bottom:0.5rem;">1. Sequential Profiling</h4>
-         <p style="font-size:0.8125rem; color:var(--text-secondary); margin:0; line-height:1.5;">The runner executes RSpec synchronously. Each successful request instruments AR queries and Bullet N+1 detections.</p>
-       </div>
-       <div>
-         <h4 style="font-size:0.875rem; color:var(--green); margin-bottom:0.5rem;">2. Logging in Real-Time</h4>
-         <p style="font-size:0.8125rem; color:var(--text-secondary); margin:0; line-height:1.5;">Each test row includes: Date/Time, Controller, Action, Duration, Slow SQL count, and N+1 count.</p>
-       </div>
-       <div>
-         <h4 style="font-size:0.875rem; color:var(--green); margin-bottom:0.5rem;">3. Summary Insight</h4>
-         <p style="font-size:0.8125rem; color:var(--text-secondary); margin:0; line-height:1.5;">At the end, a summary row is appended with total time, test count, pass/fail ratio, and a final timestamp.</p>
-       </div>
-    </div>
+    <div data-metrics-target="fileList"></div>
   </div>
 
 </div>

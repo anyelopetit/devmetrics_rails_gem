@@ -1,42 +1,364 @@
 import { Controller } from "@hotwired/stimulus"
+import consumer from "devmetrics/channels/consumer"
 
 export default class extends Controller {
-  static targets = ["logOutput", "runButton", "statusText"]
+  static targets = [
+    "runBtn", "fileList",
+    "statTotalTests", "statSlowQueries", "statN1Issues", "statCoverage"
+  ]
+
+  static values = { cableUrl: String }
 
   connect() {
-    console.log("DevMetrics Controller connected")
+    this.subscriptions = {}
+    this.runSubscription = null
+    this.fileMeta       = {}
+    this.stats = { tests: 0, slow: 0, n1: 0, coverageSum: 0, coverageCount: 0 }
+    this.currentRunId = null
   }
 
-  async runTests(event) {
-    event.preventDefault()
+  disconnect() {
+    this.teardownSubscriptions()
+  }
 
-    this.runButtonTarget.disabled = true
-    this.runButtonTarget.innerHTML = `<svg class="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> Running...`
-    this.statusTextTarget.textContent = "Executing performance suite... check terminal for progress."
+  // ── Run trigger ──────────────────────────────────────────────────────────
+
+  async runTests() {
+    this.runBtnTarget.disabled = true
+    this.runBtnTarget.textContent = "Starting…"
+    this.resetState()
 
     try {
-      const response = await fetch("/devmetrics/run_tests", {
+      const resp = await fetch(this.runTestsUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRF-Token": document.querySelector('meta[name="csrf-token"]').content
-        }
+        headers: { "X-CSRF-Token": this.csrfToken, "Content-Type": "application/json" }
+      })
+      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.error || "Failed to start run")
+
+      this.currentRunId = data.run_id
+      this.runBtnTarget.textContent = `Running (${data.files.length} files)…`
+
+      this.subscribeToRun(data.run_id)
+      data.files.forEach(f => {
+        this.fileMeta[f.file_key] = f
+        this.createFilePanel(f.file_key, f.display_name, data.run_id)
+        this.subscribeToFile(f.file_key, data.run_id)
       })
 
-      const data = await response.json()
-
-      if (data.status === "finished") {
-        this.logOutputTarget.textContent = data.results
-        this.statusTextTarget.textContent = `Tests finished! Executed ${data.spec_count} specs.`
-      } else {
-        this.statusTextTarget.textContent = `Error: ${data.message || "Unknown error"}`
-      }
-    } catch (error) {
-      console.error("Error running tests:", error)
-      this.statusTextTarget.textContent = "Request failed. Check console for details."
-    } finally {
-      this.runButtonTarget.disabled = false
-      this.runButtonTarget.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5,3 19,12 5,21"/></svg> Run Performance Tests`
+    } catch (err) {
+      this.runBtnTarget.disabled = false
+      this.runBtnTarget.textContent = "Run performance tests"
+      console.error("DevMetrics run error:", err)
     }
+  }
+
+  // ── Subscriptions ─────────────────────────────────────────────────────────
+
+  subscribeToRun(runId) {
+    this.runSubscription = consumer.subscriptions.create(
+      { channel: "Devmetrics::MetricsChannel", stream_type: "run", run_id: runId },
+      { received: (data) => this.handleRunEvent(data) }
+    )
+  }
+
+  handleRunEvent(data) {
+    if (data.type === "run_complete") {
+      this.runBtnTarget.disabled = false
+      this.runBtnTarget.textContent = "Run performance tests"
+      this.runSubscription?.unsubscribe()
+    }
+  }
+
+  subscribeToFile(fileKey, runId) {
+    const sub = consumer.subscriptions.create(
+      { channel: "Devmetrics::MetricsChannel", stream_type: "file", file_key: fileKey, run_id: runId },
+      { received: (data) => this.handleFileEvent(fileKey, data) }
+    )
+    this.subscriptions[fileKey] = sub
+  }
+
+  handleFileEvent(fileKey, data) {
+    switch (data.type) {
+
+      case "file_started": {
+        this.setFileDot(fileKey, "running")
+        const loader = document.getElementById(`dm-loader-${fileKey}`)
+        if (loader) loader.style.display = "inline-flex"
+        const meta = this.fileMeta[fileKey]
+        const path = meta?.display_name || fileKey
+        this.appendTerminalLine(fileKey, `$ bundle exec rspec ${path} --format documentation`, "command")
+        break
+      }
+
+      case "test_output":
+        this.appendTerminalLine(fileKey, data.line, data.event_type)
+        if (data.event_type === "pass" || data.event_type === "fail") this.advanceProgress(fileKey)
+        break
+
+      case "slow_query": {
+        const text = `${data.query.sql} (${data.query.ms}ms)`
+        this.appendTerminalLine(fileKey, `SLOW: ${text}`, "slow")
+        this.appendSidebarItem(fileKey, "slow", text)
+        this.stats.slow++
+        this.updateSummaryStats()
+        break
+      }
+
+      case "n1_detected":
+        this.appendTerminalLine(fileKey, `N+1 detected: ${data.message}`, "n1")
+        this.appendSidebarItem(fileKey, "n1", data.message)
+        this.stats.n1++
+        this.updateSummaryStats()
+        break
+
+      case "coverage_update":
+        this.setCoverageLabel(fileKey, data.pct)
+        this.stats.coverageSum += data.pct
+        this.stats.coverageCount++
+        this.updateSummaryStats()
+        break
+
+      case "file_complete": {
+        const loader2 = document.getElementById(`dm-loader-${fileKey}`)
+        if (loader2) loader2.style.display = "none"
+        this.finalizePanel(fileKey, data)
+        this.subscriptions[fileKey]?.unsubscribe()
+        delete this.subscriptions[fileKey]
+        break
+      }
+
+      case "file_error":
+        this.setFileDot(fileKey, "error")
+        this.appendTerminalLine(fileKey, `ERROR: ${data.message}`, "error")
+        break
+    }
+  }
+
+  // ── Panel construction ────────────────────────────────────────────────────
+
+  createFilePanel(fileKey, displayName, runId) {
+    const row = document.createElement("div")
+    row.id = `dm-file-${fileKey}`
+    row.className = "dm-file-row"
+    row.innerHTML = this.panelTemplate(fileKey, displayName, runId)
+    this.fileListTarget.appendChild(row)
+    // Auto-open the first panel
+    if (this.fileListTarget.children.length === 1) this.togglePanel(fileKey)
+  }
+
+  panelTemplate(fileKey, displayName, runId) {
+    return `
+      <div class="dm-file-header" data-action="click->metrics#togglePanel" data-file-key="${fileKey}">
+        <span class="dm-chevron" id="dm-chev-${fileKey}">▶</span>
+        <span class="dm-dot dm-dot--pending" id="dm-dot-${fileKey}"></span>
+        <span class="dm-file-name">${displayName}</span>
+        <span class="dm-file-meta" id="dm-meta-${fileKey}"></span>
+        <span class="dm-file-loader" id="dm-loader-${fileKey}" style="display:none">
+          <span class="dm-spinner dm-spinner--xs"></span>
+        </span>
+      </div>
+
+      <div class="dm-progress-bar">
+        <div class="dm-progress-fill" id="dm-prog-${fileKey}" style="width:0%"></div>
+      </div>
+
+      <div class="dm-panel" id="dm-panel-${fileKey}">
+        <div class="dm-terminal" id="dm-term-${fileKey}"></div>
+        <div class="dm-sidebar">
+
+          <div class="dm-sidebar-stat">
+            <div class="dm-sidebar-stat-hd">
+              <svg class="dm-sidebar-icon dm-sidebar-icon--slow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2 4 9h4.5L6.5 14 12 7H7.5L9.5 2Z"/></svg>
+              <span class="dm-sidebar-label">Slow Queries</span>
+              <span class="dm-sidebar-value dm-sidebar-value--slow" id="dm-slow-count-${fileKey}">0</span>
+            </div>
+            <div id="dm-slow-${fileKey}" class="dm-sidebar-items"></div>
+          </div>
+
+          <div class="dm-sidebar-stat">
+            <div class="dm-sidebar-stat-hd">
+              <svg class="dm-sidebar-icon dm-sidebar-icon--n1" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 2 13h12L8 2Z"/><line x1="8" y1="7.5" x2="8" y2="9.5"/><circle cx="8" cy="11.5" r="0.6" fill="currentColor" stroke="none"/></svg>
+              <span class="dm-sidebar-label">N+1 Issues</span>
+              <span class="dm-sidebar-value dm-sidebar-value--n1" id="dm-n1-count-${fileKey}">0</span>
+            </div>
+            <div id="dm-n1-${fileKey}" class="dm-sidebar-items"></div>
+          </div>
+
+          <div class="dm-sidebar-stat">
+            <div class="dm-sidebar-stat-hd">
+              <svg class="dm-sidebar-icon dm-sidebar-icon--cov" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 3 4v4c0 3 2.5 5 5 6 2.5-1 5-3 5-6V4L8 2Z"/><polyline points="5.5,8 7.5,10 10.5,7"/></svg>
+              <span class="dm-sidebar-label">Coverage</span>
+              <span class="dm-sidebar-value dm-sidebar-value--cov" id="dm-cov-${fileKey}">—</span>
+            </div>
+          </div>
+
+          <div class="dm-sidebar-log">
+            <a href="${this.logDownloadUrl(runId, fileKey)}" class="dm-log-link" id="dm-log-${fileKey}" style="display:none">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:11px;height:11px;flex-shrink:0"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M3 12h10"/></svg>
+              Download log
+            </a>
+          </div>
+
+        </div>
+      </div>
+    `
+  }
+
+  togglePanel(fileKey) {
+    if (typeof fileKey !== "string") fileKey = fileKey.currentTarget.dataset.fileKey
+    const panel = document.getElementById(`dm-panel-${fileKey}`)
+    const chev  = document.getElementById(`dm-chev-${fileKey}`)
+    const open  = panel.classList.toggle("dm-panel--open")
+    chev.classList.toggle("dm-chevron--open", open)
+  }
+
+  // ── Terminal helpers ──────────────────────────────────────────────────────
+
+  appendTerminalLine(fileKey, rawText, eventType = "info") {
+    const term = document.getElementById(`dm-term-${fileKey}`)
+    if (!term) return
+
+    // Skip blank info lines that just add noise
+    if (eventType === "info" && rawText.trim() === "") return
+
+    const text = this.formatLine(rawText, eventType)
+    const line = document.createElement("div")
+    line.className = `dm-term-line dm-term-line--${eventType}`
+    line.textContent = text
+    term.appendChild(line)
+    term.scrollTop = term.scrollHeight
+
+    this.stats.tests += (eventType === "pass" || eventType === "fail") ? 1 : 0
+    this.updateSummaryStats()
+  }
+
+  formatLine(text, eventType) {
+    if (eventType === "pass") return "✓ " + text.replace(/^\s*[\.·✓]\s*/, "").trim()
+    if (eventType === "fail") return "✗ " + text.replace(/^\s*[\.·✗]\s*/, "").trim()
+    return text
+  }
+
+  appendSidebarItem(fileKey, type, text) {
+    const container = document.getElementById(`dm-${type}-${fileKey}`)
+    if (!container) return
+    const item = document.createElement("div")
+    item.className = `dm-sidebar-item dm-sidebar-item--${type}`
+    item.textContent = text
+    container.appendChild(item)
+
+    const counter = document.getElementById(`dm-${type}-count-${fileKey}`)
+    if (counter) counter.textContent = container.children.length
+  }
+
+  advanceProgress(fileKey) {
+    const fill = document.getElementById(`dm-prog-${fileKey}`)
+    if (!fill) return
+    const cur = parseFloat(fill.style.width) || 0
+    fill.style.width = `${Math.min(95, cur + (95 - cur) * 0.12).toFixed(1)}%`
+  }
+
+  setFileDot(fileKey, state) {
+    const dot = document.getElementById(`dm-dot-${fileKey}`)
+    if (dot) dot.className = `dm-dot dm-dot--${state}`
+  }
+
+  setCoverageLabel(fileKey, pct) {
+    const el = document.getElementById(`dm-cov-${fileKey}`)
+    if (el) el.textContent = `${pct}%`
+  }
+
+  finalizePanel(fileKey, data) {
+    const status = data.status
+    this.setFileDot(fileKey, status)
+
+    // Progress bar → 100%
+    const fill = document.getElementById(`dm-prog-${fileKey}`)
+    if (fill) {
+      fill.style.width = "100%"
+      fill.classList.toggle("dm-progress-fill--passed", status === "passed")
+      fill.classList.toggle("dm-progress-fill--failed", status === "failed")
+    }
+
+    // Summary line in terminal
+    const term = document.getElementById(`dm-term-${fileKey}`)
+    if (term) {
+      const sep = document.createElement("div")
+      sep.className = "dm-term-separator"
+      term.appendChild(sep)
+      const total = (data.passed || 0) + (data.failed || 0)
+      const covStr = data.coverage != null ? ` — coverage ${data.coverage}%` : ""
+      this.appendTerminalLine(
+        fileKey,
+        `${total} example${total !== 1 ? "s" : ""}. ${data.failed || 0} failure${data.failed !== 1 ? "s" : ""}${covStr}`,
+        "summary"
+      )
+    }
+
+    // Header badges
+    const meta = document.getElementById(`dm-meta-${fileKey}`)
+    if (meta) meta.innerHTML = this.metaBadges(data)
+
+    // Log link
+    const logLink = document.getElementById(`dm-log-${fileKey}`)
+    if (logLink) logLink.style.display = "inline-flex"
+  }
+
+  metaBadges(data) {
+    const secs = ((data.duration_ms || 0) / 1000).toFixed(2)
+    let html = ''
+    if ((data.n1_count || 0) > 0)
+      html += `<span class="dm-badge dm-badge--n1" title="N+1 issues">${data.n1_count} N+1</span>`
+    if ((data.slow_count || 0) > 0)
+      html += `<span class="dm-badge dm-badge--slow" title="Slow queries">${data.slow_count} slow</span>`
+    if (data.coverage != null)
+      html += `<span class="dm-badge dm-badge--cov" title="Coverage">${data.coverage}%</span>`
+    html += `<span class="dm-badge dm-badge--time" title="Duration">${secs}s</span>`
+    return html
+  }
+
+  // ── Summary stats ─────────────────────────────────────────────────────────
+
+  updateSummaryStats() {
+    if (this.hasStatTotalTestsTarget)
+      this.statTotalTestsTarget.textContent = this.stats.tests
+    if (this.hasStatSlowQueriesTarget)
+      this.statSlowQueriesTarget.textContent = this.stats.slow
+    if (this.hasStatN1IssuesTarget)
+      this.statN1IssuesTarget.textContent = this.stats.n1
+    if (this.hasStatCoverageTarget && this.stats.coverageCount > 0)
+      this.statCoverageTarget.textContent =
+        `${(this.stats.coverageSum / this.stats.coverageCount).toFixed(1)}%`
+  }
+
+  // ── Teardown & utilities ──────────────────────────────────────────────────
+
+  resetState() {
+    this.teardownSubscriptions()
+    this.fileMeta = {}
+    this.stats = { tests: 0, slow: 0, n1: 0, coverageSum: 0, coverageCount: 0 }
+    this.fileListTarget.innerHTML = ""
+    this.updateSummaryStats()
+  }
+
+  teardownSubscriptions() {
+    Object.values(this.subscriptions).forEach(s => s?.unsubscribe())
+    this.subscriptions = {}
+    this.runSubscription?.unsubscribe()
+    this.runSubscription = null
+  }
+
+  get runTestsUrl() {
+    const mount = this.element.closest("[data-devmetrics-mount-path]")
+      ?.dataset.devmetricsMountPath || "/devmetrics"
+    return `${mount}/run_tests`
+  }
+
+  logDownloadUrl(runId, fileKey) {
+    return `/devmetrics/runs/${runId}/logs/${fileKey}/download`
+  }
+
+  get csrfToken() {
+    return document.querySelector("meta[name='csrf-token']")?.content || ""
   }
 }

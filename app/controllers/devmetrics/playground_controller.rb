@@ -40,7 +40,7 @@ module Devmetrics
             model = notification.base_class rescue "Unknown"
             suggestion = notification.body
 
-            sq = SlowQuery.create!(
+            sq = Devmetrics::SlowQuery.create!(
               model_class: model,
               line_number: caller.first.match(/:(\d+):/)&.captures&.first&.to_i || 0,
               fix_suggestion: suggestion
@@ -48,8 +48,7 @@ module Devmetrics
 
             slow_queries_detected << sq
 
-            # Broadcast immediately
-            ActionCable.server.broadcast("MetricsChannel", {
+            ActionCable.server.broadcast("devmetrics:metrics", {
               type: "new_slow_query",
               payload: {
                 id: sq.id,
@@ -64,11 +63,7 @@ module Devmetrics
 
         Bullet.end_request if defined?(Bullet)
 
-        # Save regular query log
-        QueryLog.create(query: query_string, duration: duration)
-
-        # Trigger a dashboard stats update
-        MetricsAnalyzerJob.perform_later
+        QueryLog.create(query: query_string, duration: duration) rescue nil
 
         render json: {
           status: "success",
