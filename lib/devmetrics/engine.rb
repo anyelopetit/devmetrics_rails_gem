@@ -13,10 +13,19 @@ module Devmetrics
       require "devmetrics/run_orchestrator"
       require "devmetrics/bullet_log_parser"
 
-      # Make channel available without namespace prefix for ActionCable
-      # Must set in Object namespace so ActionCable can find it
+      # Explicitly require and alias channel for ActionCable/Solid Cable
+      # ActionCable uses constantize which needs the class to be loadable
+      begin
+        require "devmetrics/metrics_channel"
+      rescue LoadError
+        # Already loaded via autoload
+      end
+
       unless ::Object.const_defined?(:DevmetricsChannel)
         ::Object.const_set(:DevmetricsChannel, Devmetrics::MetricsChannel)
+      end
+      unless ::Object.const_defined?(:MetricsChannel)
+        ::Object.const_set(:MetricsChannel, Devmetrics::MetricsChannel)
       end
     end
 

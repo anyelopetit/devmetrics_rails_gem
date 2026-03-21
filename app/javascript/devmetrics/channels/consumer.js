@@ -1,2 +1,2 @@
 import { createConsumer } from "@rails/actioncable"
-export default createConsumer("/devmetrics/cable")
+export default createConsumer("/cable")

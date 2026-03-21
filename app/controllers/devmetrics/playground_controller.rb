@@ -48,8 +48,7 @@ module Devmetrics
 
             slow_queries_detected << sq
 
-            # Broadcast immediately
-            ActionCable.server.broadcast("MetricsChannel", {
+            ActionCable.server.broadcast("devmetrics:metrics", {
               type: "new_slow_query",
               payload: {
                 id: sq.id,
